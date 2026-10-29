@@ -22,7 +22,10 @@ ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 ChangesAssociations=yes
+UninstallDisplayName=ProDiscover Basic & IR (64-bit)
 UninstallDisplayIcon={app}\assets\prodiscover.ico
+CloseApplications=yes
+RestartApplications=no
 DisableProgramGroupPage=auto
 
 [Languages]
@@ -39,7 +42,7 @@ Source: "..\..\README.md"; DestDir: "{app}"; Flags: ignoreversion isreadme
 
 [Icons]
 Name: "{group}\ProDiscover Basic"; Filename: "{app}\prodiscover.exe"; IconFilename: "{app}\assets\prodiscover.ico"; WorkingDir: "{app}"
-Name: "{group}\{cm:UninstallProgram,ProDiscover Basic}"; Filename: "{uninstallexe}"
+Name: "{group}\{cm:UninstallProgram,ProDiscover Basic}"; Filename: "{uninstallexe}"; IconFilename: "{app}\assets\prodiscover.ico"
 Name: "{autodesktop}\ProDiscover Basic"; Filename: "{app}\prodiscover.exe"; IconFilename: "{app}\assets\prodiscover.ico"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Registry]
@@ -49,7 +52,23 @@ Root: HKA; Subkey: "Software\Classes\.pds"; ValueType: string; ValueName: ""; Va
 Root: HKA; Subkey: "Software\Classes\ProDiscover.ForensicImage"; ValueType: string; ValueName: ""; ValueData: "ProDiscover Forensic Evidence Image"; Flags: uninsdeletekey; Tasks: associate
 Root: HKA; Subkey: "Software\Classes\ProDiscover.ForensicImage\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\assets\prodiscover.ico,0"; Flags: uninsdeletekey; Tasks: associate
 Root: HKA; Subkey: "Software\Classes\ProDiscover.ForensicImage\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\prodiscover.exe"" ""%1"""; Flags: uninsdeletekey; Tasks: associate
+Root: HKA; Subkey: "Software\Classes\ProDiscover.Project"; ValueType: string; ValueName: ""; ValueData: "ProDiscover Forensic Project File"; Flags: uninsdeletekey; Tasks: associate
+Root: HKA; Subkey: "Software\Classes\ProDiscover.Project\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\assets\prodiscover.ico,0"; Flags: uninsdeletekey; Tasks: associate
+Root: HKA; Subkey: "Software\Classes\ProDiscover.Project\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\prodiscover.exe"" ""%1"""; Flags: uninsdeletekey; Tasks: associate
+
+[UninstallDelete]
+Type: filesandordirs; Name: "{app}\assets"
+Type: filesandordirs; Name: "{app}\Sample Images"
+Type: filesandordirs; Name: "{app}\carved_files"
+Type: filesandordirs; Name: "{app}\reports"
+Type: filesandordirs; Name: "{app}\exports"
+Type: files; Name: "{app}\*.log"
+Type: files; Name: "{app}\*.pds"
+Type: files; Name: "{app}\*.dd"
+Type: files; Name: "{app}\*.eve"
+Type: dirifempty; Name: "{app}"
 
 [Run]
 Filename: "{app}\prodiscover.exe"; Description: "{cm:LaunchProgram,ProDiscover Basic}"; Flags: nowait postinstall skipifsilent
+
 
