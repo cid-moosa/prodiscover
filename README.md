@@ -2,6 +2,9 @@
 
 A pixel-faithful, bit-exact native 64-bit desktop forensic suite reconstructing the classic **ProDiscover Basic & Incident Response (IR)** platform. Designed for modern Windows 10/11 (64-bit) and Linux systems, maintaining strict adherence to the original MFC interface and forensic workflows while delivering modern reliability, high-speed acquisition, and zero data loss.
 
+> [!WARNING]
+> **Active Development & Testing Notice**: This software and setup installer are currently under active development and **have not been fully tested across all environments**. Please wait for forthcoming updates and stable test releases before deploying in critical environments.
+
 ---
 
 ## Project Overview
