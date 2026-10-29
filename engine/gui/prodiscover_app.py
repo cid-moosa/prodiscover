@@ -66,6 +66,15 @@ def resolve_file(rel_path):
 
 
 
+def is_admin():
+    if sys.platform == "win32":
+        try:
+            return ctypes.windll.shell32.IsUserAnAdmin() != 0
+        except Exception:
+            return False
+    return os.geteuid() == 0 if hasattr(os, "geteuid") else True
+
+
 class Win32DeviceStream:
     """
     Forensic raw block device streaming reader for Windows NT and Linux.
@@ -101,13 +110,16 @@ class Win32DeviceStream:
                 0,
                 None
             )
-            if self.handle == -1 or self.handle == 0:
+            INVALID_HANDLE = ctypes.c_void_p(-1).value
+            if self.handle in (None, 0, -1, INVALID_HANDLE, 0xFFFFFFFF):
                 err = ctypes.GetLastError()
+                self.handle = None
                 try:
                     self.file_obj = open(dev_path, "rb", buffering=0)
-                    self.handle = None
                 except Exception:
-                    raise OSError(f"Failed to open device {dev_path} (Win32 Error: {err}). Administrator privileges required.")
+                    if err == 5:
+                        raise PermissionError(f"Access Denied (Win32 Error 5) opening {clean_path}. Administrator privileges are required for raw physical drive/volume acquisition.")
+                    raise OSError(f"Failed to open device {clean_path} (Win32 Error: {err}). Administrator privileges required.")
         else:
             self.file_obj = open(dev_path, "rb", buffering=0)
 
@@ -117,7 +129,8 @@ class Win32DeviceStream:
             self.offset += len(data)
             return data
 
-        if not self.handle or self.handle == -1:
+        INVALID_HANDLE = ctypes.c_void_p(-1).value
+        if not self.handle or self.handle in (-1, 0, INVALID_HANDLE, 0xFFFFFFFF):
             return b""
 
         align_n = ((n + self.sector_size - 1) // self.sector_size) * self.sector_size
@@ -153,7 +166,7 @@ class Win32DeviceStream:
                 self.offset += self.sector_size
             else:
                 self.bad_sectors.append(self.offset // self.sector_size)
-                result.extend(b"" * self.sector_size)
+                result.extend(b"\x00" * self.sector_size)
                 self.offset += self.sector_size
                 pos = ctypes.c_int64(self.offset)
                 ctypes.windll.kernel32.SetFilePointerEx(self.handle, pos, None, 0)
@@ -161,7 +174,8 @@ class Win32DeviceStream:
 
     def seek(self, offset, whence=0):
         if self.file_obj:
-            return self.file_obj.seek(offset, whence)
+            self.offset = self.file_obj.seek(offset, whence)
+            return self.offset
 
         pos = ctypes.c_int64(offset)
         new_pos = ctypes.c_int64(0)
@@ -170,6 +184,8 @@ class Win32DeviceStream:
         return self.offset
 
     def tell(self):
+        if self.file_obj:
+            return self.file_obj.tell()
         return self.offset
 
     def close(self):
@@ -220,6 +236,7 @@ class ProDiscoverApp:
         self.current_hex_mode = "hex"  # hex, text, slack
         self.audit_log = []
         self.stop_requested = False
+        self.loaded_evidence = {}
 
         # Find compiled engine binary if available
         self.engine_bin = self._find_engine_binary()
@@ -231,8 +248,7 @@ class ProDiscoverApp:
         self._build_main_panes()
         self._build_status_bar()
 
-        # Enumerate attached drives
-        self.refresh_physical_drives()
+        # Fresh clean project tree (0 attached evidence items initially)
 
         # Launch startup dialog if enabled (Page 18 of ProDiscover Manual)
         if self.show_startup_var.get():
@@ -727,6 +743,7 @@ class ProDiscoverApp:
 
     def _populate_tree_skeleton(self):
         self.tree.delete(*self.tree.get_children())
+        self.loaded_evidence = {}
         
         icon_folder = self.tree_icons.get("folder")
         icon_report = self.tree_icons.get("report")
@@ -745,7 +762,7 @@ class ProDiscoverApp:
 
         self.tree.insert(self.node_project, "end", text="Report", image=icon_report, tags=("report",))
 
-        self.node_add = self.tree.insert(self.node_project, "end", text="Add", image=icon_add, open=True)
+        self.node_add = self.tree.insert(self.node_project, "end", text="Add", image=icon_add, open=False)
         self.tree.insert(self.node_add, "end", text="Capture & Add Image", image=icon_capture, tags=("capture_image",))
         self.tree.insert(self.node_add, "end", text="Image File", image=icon_image, tags=("add_image",))
         self.tree.insert(self.node_add, "end", text="Disk", image=icon_disk, tags=("add_disk",))
@@ -753,8 +770,8 @@ class ProDiscoverApp:
         self.tree.insert(self.node_project, "end", text="Remove", image=icon_remove, tags=("remove",))
 
         self.node_content = self.tree.insert(self.node_project, "end", text="Content View", image=icon_folder, open=True)
-        self.node_images = self.tree.insert(self.node_content, "end", text="Images", image=icon_image, open=True)
-        self.node_disks = self.tree.insert(self.node_content, "end", text="Disks", image=icon_disk, open=True)
+        self.node_images = self.tree.insert(self.node_content, "end", text="Images", image=icon_image, open=False)
+        self.node_disks = self.tree.insert(self.node_content, "end", text="Disks", image=icon_disk, open=False)
         self.node_remote = self.tree.insert(self.node_content, "end", text="Remote Drives", image=icon_remote, open=False)
 
         self.node_clusters = self.tree.insert(self.node_project, "end", text="Cluster View", image=icon_folder, open=False)
@@ -766,7 +783,7 @@ class ProDiscoverApp:
         self.tree.insert(self.node_project, "end", text="View Log", image=icon_log, tags=("log",))
         self.tree.insert(self.node_project, "end", text="Search", image=icon_search, tags=("search",))
 
-        self.node_results = self.tree.insert(self.node_project, "end", text="Search Results", image=icon_folder, open=True)
+        self.node_results = self.tree.insert(self.node_project, "end", text="Search Results", image=icon_folder, open=False)
         self.tree.insert(self.node_results, "end", text="Content Search Results", image=icon_search, tags=("srch_content",))
         self.tree.insert(self.node_results, "end", text="Cluster Search Results", image=icon_search, tags=("srch_cluster",))
         self.tree.insert(self.node_results, "end", text="Registry Search Results", image=icon_search, tags=("srch_registry",))
@@ -904,7 +921,8 @@ class ProDiscoverApp:
             h = ctypes.windll.kernel32.CreateFileW(
                 clean_path, 0x80000000, 1 | 2, None, 3, 0, None
             )
-            if h == -1 or h == 0:
+            INVALID_HANDLE = ctypes.c_void_p(-1).value
+            if h in (None, 0, -1, INVALID_HANDLE, 0xFFFFFFFF):
                 return b""
             try:
                 li = ctypes.c_int64(aligned_offset)
@@ -918,7 +936,11 @@ class ProDiscoverApp:
                     return raw_data[offset_diff : offset_diff + count]
                 return b""
             finally:
-                ctypes.windll.kernel32.CloseHandle(h)
+                if h and h not in (None, 0, -1, INVALID_HANDLE, 0xFFFFFFFF):
+                    try:
+                        ctypes.windll.kernel32.CloseHandle(ctypes.c_void_p(h))
+                    except Exception:
+                        pass
         else:
             try:
                 with open(self.current_media_path, "rb") as f:
@@ -943,6 +965,38 @@ class ProDiscoverApp:
         is_device = path.startswith("\\\\.\\") or path.startswith("/dev/")
         if not is_device and not os.path.exists(path):
             messagebox.showerror("Error", f"Cannot open target media:\n{path}")
+            return
+
+        # Elevation check for raw physical/volume drives on Windows
+        if is_device and sys.platform == "win32" and not is_admin():
+            ans = messagebox.askyesno(
+                "Administrator Rights Required",
+                f"Opening raw storage target '{path}' requires Administrator privileges on Windows.\n\n"
+                "Would you like to restart ProDiscover as Administrator now?",
+                parent=self.root
+            )
+            if ans:
+                exe = sys.executable
+                params = f'"{os.path.abspath(__file__)}"' if not getattr(sys, 'frozen', False) else ""
+                try:
+                    ctypes.windll.shell32.ShellExecuteW(None, "runas", exe, params, None, 1)
+                    self.root.destroy()
+                except Exception as err:
+                    messagebox.showerror("Elevation Error", f"Failed to elevate: {err}")
+            return
+
+        norm_path = path.upper() if is_device else os.path.abspath(path)
+
+        # Deduplication: If media is already loaded in the project tree, select it without duplicating
+        if norm_path in self.loaded_evidence:
+            ev = self.loaded_evidence[norm_path]
+            node_id = ev.get("node_id")
+            if node_id and self.tree.exists(node_id):
+                self.tree.selection_set(node_id)
+                self.tree.see(node_id)
+            self.current_media_path = ev.get("path", path)
+            self.render_table(self.current_files)
+            self.load_sector(0)
             return
 
         if is_device:
@@ -997,14 +1051,28 @@ class ProDiscoverApp:
 
         target_name = disk_name if disk_name else (os.path.basename(path) if not is_device else path)
         if item_icon:
-            item_node = self.tree.insert(target_parent, "end", text=f"{target_name} [{self.fs_type}]", image=item_icon, open=True)
+            item_node = self.tree.insert(target_parent, "end", text=f"{target_name} [{self.fs_type}]", image=item_icon, open=True, tags=("loaded_media", norm_path))
         else:
-            item_node = self.tree.insert(target_parent, "end", text=f"{target_name} [{self.fs_type}]", open=True)
+            item_node = self.tree.insert(target_parent, "end", text=f"{target_name} [{self.fs_type}]", open=True, tags=("loaded_media", norm_path))
 
         if folder_icon:
-            self.tree.insert(item_node, "end", text="Partition 0 [Root Directory]", image=folder_icon, tags=("partition_root",))
+            self.tree.insert(item_node, "end", text="Partition 0 [Root Directory]", image=folder_icon, tags=("partition_root", norm_path))
         else:
-            self.tree.insert(item_node, "end", text="Partition 0 [Root Directory]", tags=("partition_root",))
+            self.tree.insert(item_node, "end", text="Partition 0 [Root Directory]", tags=("partition_root", norm_path))
+
+        self.loaded_evidence[norm_path] = {
+            "node_id": item_node,
+            "path": self.current_media_path,
+            "name": target_name,
+            "is_device": is_device,
+            "fs_type": self.fs_type
+        }
+
+        # Expand parent and select new evidence
+        self.tree.item(target_parent, open=True)
+        self.tree.item(self.node_content, open=True)
+        self.tree.selection_set(item_node)
+        self.tree.see(item_node)
 
         self.root.title(f"ProDiscover Basic - [Project - {disp_title}]")
         self.lbl_table_title.config(text=f"File List - [{disp_title}: Root Directory]")
@@ -1201,33 +1269,44 @@ class ProDiscoverApp:
         sel = self.tree.selection()
         if not sel:
             return
-        item_text = self.tree.item(sel[0], "text")
-        tags = self.tree.item(sel[0], "tags")
+        selected_id = sel[0]
+        tags = self.tree.item(selected_id, "tags")
+        if not tags:
+            return
 
-        if "partition_root" in tags or item_text.startswith("C:"):
+        tag_type = tags[0]
+        if tag_type == "loaded_media":
+            norm_path = tags[1] if len(tags) > 1 else None
+            if norm_path and norm_path in self.loaded_evidence:
+                ev = self.loaded_evidence[norm_path]
+                if self.current_media_path != ev["path"]:
+                    self.load_media(ev["path"], disk_name=ev["name"])
+                else:
+                    self.render_table(self.current_files)
+                    self.load_sector(0)
+        elif tag_type == "partition_root":
             self.render_table(self.current_files)
-            self.lbl_table_title.config(text="File List - [Root Directory]")
-        elif "drive" in tags:
-            dev_path = tags[1] if len(tags) > 1 else None
-            if dev_path:
-                self.load_media(dev_path)
-        elif "report" in tags:
+            self.lbl_table_title.config(text=f"File List - [{os.path.basename(self.current_media_path or 'Root')}: Root Directory]")
+            self.load_sector(0)
+        elif tag_type == "report":
             self.action_generate_report()
-        elif "add_image" in tags:
+        elif tag_type == "capture_image":
+            self.dlg_capture_image()
+        elif tag_type == "add_image":
             self.dlg_open_image()
-        elif "add_disk" in tags:
+        elif tag_type == "add_disk":
             self.dlg_add_disk()
-        elif "remove" in tags:
+        elif tag_type == "remove":
             self.action_remove_evidence()
-        elif "search" in tags:
+        elif tag_type == "search":
             self.dlg_search()
-        elif "log" in tags:
+        elif tag_type == "log":
             self.switch_view("log")
-        elif "registry" in tags:
+        elif tag_type == "registry":
             self.switch_view("registry")
-        elif "eventlog" in tags:
+        elif tag_type == "eventlog":
             self.switch_view("eventlog")
-        elif "srch_content" in tags or "srch_cluster" in tags or "srch_carved" in tags or "srch_mismatch" in tags:
+        elif tag_type in ("srch_content", "srch_cluster", "srch_carved", "srch_mismatch", "srch_registry", "srch_eventlog"):
             pass
 
     def switch_view(self, view_name):
@@ -2146,6 +2225,26 @@ class ProDiscoverApp:
                 messagebox.showerror("Capture Image", "Please specify a destination image file path.", parent=dlg)
                 return
 
+            is_dev = src_path.startswith("\\\\.\\") or src_path.startswith("/dev/")
+            if is_dev and sys.platform == "win32" and not is_admin():
+                ans = messagebox.askyesno(
+                    "Administrator Privileges Required",
+                    "Windows requires Administrator privileges to perform raw bit-stream acquisition of physical drives and volumes.\n\n"
+                    "Would you like to restart ProDiscover as Administrator now?",
+                    parent=dlg
+                )
+                if ans:
+                    exe = sys.executable
+                    params = f'"{os.path.abspath(__file__)}"' if not getattr(sys, 'frozen', False) else ""
+                    try:
+                        ctypes.windll.shell32.ShellExecuteW(None, "runas", exe, params, None, 1)
+                        self.root.destroy()
+                    except Exception as err:
+                        messagebox.showerror("Elevation Error", f"Failed to elevate: {err}", parent=dlg)
+                    return
+                else:
+                    return
+
             try:
                 total_sec = int(e_sec.get().strip() or "0")
             except Exception:
@@ -2203,10 +2302,19 @@ class ProDiscoverApp:
                     last_update = t0
 
                     f_src = None
-                    if is_dev and sys.platform == "win32":
-                        f_src = Win32DeviceStream(src_path, total_bytes)
-                    elif os.path.exists(src_path):
-                        f_src = open(src_path, "rb")
+                    try:
+                        if is_dev and sys.platform == "win32":
+                            f_src = Win32DeviceStream(src_path, total_bytes)
+                        elif os.path.exists(src_path):
+                            f_src = open(src_path, "rb")
+                        else:
+                            raise FileNotFoundError(f"Source target not found: {src_path}")
+                    except Exception as open_err:
+                        prog_dlg.after(0, lambda err=open_err: (
+                            prog_dlg.destroy(),
+                            messagebox.showerror("Acquisition Error", f"Failed to access source device:\n{err}\n\nPlease check Administrator rights and drive connectivity.", parent=dlg)
+                        ))
+                        return
 
                     with open(dst_path, "wb") as f_out:
                         if "eve" in cb_fmt.get().lower():
@@ -2250,9 +2358,26 @@ class ProDiscoverApp:
                         f_src.close()
 
                     if cancel_flag[0]:
+                        try:
+                            if os.path.exists(dst_path):
+                                os.remove(dst_path)
+                        except Exception:
+                            pass
                         prog_dlg.after(0, lambda: (
                             prog_dlg.destroy(),
                             messagebox.showwarning("Acquisition Cancelled", "Disk image acquisition was cancelled by user.", parent=dlg)
+                        ))
+                        return
+
+                    if bytes_copied == 0:
+                        try:
+                            if os.path.exists(dst_path):
+                                os.remove(dst_path)
+                        except Exception:
+                            pass
+                        prog_dlg.after(0, lambda: (
+                            prog_dlg.destroy(),
+                            messagebox.showerror("Acquisition Error", f"0 bytes were acquired from {src_path}.\n\nSource device may be locked or require Administrator elevation.", parent=dlg)
                         ))
                         return
 
@@ -2287,6 +2412,11 @@ class ProDiscoverApp:
                     prog_dlg.after(0, on_success)
 
                 except Exception as ex:
+                    try:
+                        if os.path.exists(dst_path):
+                            os.remove(dst_path)
+                    except Exception:
+                        pass
                     prog_dlg.after(0, lambda err=ex: (
                         prog_dlg.destroy(),
                         messagebox.showerror("Acquisition Error", f"An error occurred during acquisition:\n{err}", parent=dlg)
@@ -2599,14 +2729,68 @@ class ProDiscoverApp:
         messagebox.showinfo("Save Project", "Project state saved successfully conforming to ProjectFileSchema.xsd.")
 
     def action_remove_evidence(self):
-        if messagebox.askyesno("Remove Evidence", "Remove currently active evidence media from project?"):
+        sel = self.tree.selection()
+        target_key = None
+        target_node = None
+
+        if sel:
+            selected_id = sel[0]
+            tags = self.tree.item(selected_id, "tags")
+            if tags and len(tags) > 1 and tags[0] in ("loaded_media", "partition_root"):
+                target_key = tags[1]
+                if tags[0] == "partition_root":
+                    target_node = self.tree.parent(selected_id)
+                else:
+                    target_node = selected_id
+
+        if not target_key and self.current_media_path:
+            norm_curr = self.current_media_path.upper() if (self.current_media_path.startswith("\\\\.\\") or self.current_media_path.startswith("/dev/")) else os.path.abspath(self.current_media_path)
+            if norm_curr in self.loaded_evidence:
+                target_key = norm_curr
+                target_node = self.loaded_evidence[norm_curr].get("node_id")
+
+        if not target_key or not self.loaded_evidence:
+            messagebox.showinfo("Remove Evidence", "No active evidence media selected to remove.")
+            return
+
+        ev_info = self.loaded_evidence.get(target_key, {})
+        disp_name = ev_info.get("name") or os.path.basename(self.current_media_path or "media")
+
+        ans = messagebox.askyesno(
+            "Remove Evidence",
+            f"Are you sure you want to remove '{disp_name}' from the current project?",
+            parent=self.root
+        )
+        if not ans:
+            return
+
+        # 1. Delete tree node
+        if target_node and self.tree.exists(target_node):
+            self.tree.delete(target_node)
+
+        # 2. Remove from loaded_evidence
+        if target_key in self.loaded_evidence:
+            del self.loaded_evidence[target_key]
+
+        # 3. If removed media was currently active, reset view or switch
+        if self.current_media_path == ev_info.get("path") or not self.loaded_evidence:
             self.current_media_path = None
             self.current_files = []
             self.table.delete(*self.table.get_children())
             self.hex_text.delete("1.0", tk.END)
+            self.hex_text.insert("1.0", "Ready. Open evidence image or physical drive to inspect raw sectors.\n")
             self.sb_objects.config(text="0 Object(s) (0 Folder(s), 0 File(s))")
             self.sb_selected.config(text="Selected: None")
             self.sb_hash.config(text="MD5: Inactive")
+            self.lbl_table_title.config(text="File List - [Root Directory]")
+            self.root.title(f"ProDiscover Basic - [Project - {self.case_name}]")
+
+            if self.loaded_evidence:
+                first_k = next(iter(self.loaded_evidence))
+                first_ev = self.loaded_evidence[first_k]
+                self.load_media(first_ev["path"], disk_name=first_ev["name"])
+
+        self.log_action(f"Removed evidence from project: {disp_name}")
 
     def action_export_project_xml(self):
         if not self.current_media_path:
