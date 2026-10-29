@@ -14,6 +14,7 @@ import hashlib
 import struct
 import subprocess
 import threading
+import queue
 import json
 import xml.etree.ElementTree as ET
 import tkinter as tk
@@ -73,6 +74,133 @@ def is_admin():
         except Exception:
             return False
     return os.geteuid() == 0 if hasattr(os, "geteuid") else True
+
+
+def silent_subprocess_kwargs():
+    kwargs = {}
+    if sys.platform == "win32":
+        kwargs["creationflags"] = 0x08000000  # subprocess.CREATE_NO_WINDOW
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = 0  # SW_HIDE
+        kwargs["startupinfo"] = si
+    return kwargs
+
+
+def silent_check_output(cmd, **kwargs):
+    merged = silent_subprocess_kwargs()
+    merged.update(kwargs)
+    return subprocess.check_output(cmd, **merged)
+
+
+def silent_call(cmd, **kwargs):
+    merged = silent_subprocess_kwargs()
+    merged.update(kwargs)
+    return subprocess.call(cmd, **merged)
+
+
+class LoadingDialog:
+    """
+    Non-blocking modal loading screen and progress animation
+    for importing large forensic disk images without freezing the GUI.
+    """
+    def __init__(self, parent, dispatch_fn=None, title="Importing Forensic Evidence", message="Importing evidence media..."):
+        self.top = tk.Toplevel(parent)
+        self.dispatch_fn = dispatch_fn
+        self.top.title(title)
+        self.top.geometry("450x180")
+        self.top.resizable(False, False)
+        self.top.transient(parent)
+        self.top.configure(bg="#ECE9D8")
+
+        try:
+            parent.update_idletasks()
+            pw = parent.winfo_width()
+            ph = parent.winfo_height()
+            px = parent.winfo_rootx()
+            py = parent.winfo_rooty()
+            if pw > 100 and ph > 100:
+                x = px + (pw // 2) - 225
+                y = py + (ph // 2) - 90
+                self.top.geometry(f"450x180+{max(0, x)}+{max(0, y)}")
+        except Exception:
+            pass
+
+        self.top.grab_set()
+
+        if hasattr(parent, "app_icon_photo") and parent.app_icon_photo:
+            try:
+                self.top.iconphoto(True, parent.app_icon_photo)
+            except Exception:
+                pass
+
+        hdr_frame = tk.Frame(self.top, bg="#002D62", height=38)
+        hdr_frame.pack(fill=tk.X, side=tk.TOP)
+        hdr_frame.pack_propagate(False)
+
+        lbl_hdr = tk.Label(hdr_frame, text="ProDiscover Forensic Studio - Evidence Import", font=("Tahoma", 9, "bold"), fg="#FFFFFF", bg="#002D62")
+        lbl_hdr.pack(side=tk.LEFT, padx=12, pady=9)
+
+        f_body = tk.Frame(self.top, bg="#ECE9D8", padx=16, pady=10)
+        f_body.pack(fill=tk.BOTH, expand=True)
+
+        self.lbl_title = tk.Label(f_body, text=message, font=("Tahoma", 9, "bold"), bg="#ECE9D8", fg="#003366", anchor="w")
+        self.lbl_title.pack(fill=tk.X, pady=(0, 2))
+
+        self.lbl_status = tk.Label(f_body, text="Initializing forensic analyzer...", font=("Tahoma", 8), bg="#ECE9D8", fg="#333333", anchor="w")
+        self.lbl_status.pack(fill=tk.X, pady=(0, 6))
+
+        self.pb = ttk.Progressbar(f_body, mode="determinate", length=415)
+        self.pb.pack(fill=tk.X, pady=(0, 6))
+
+        self.lbl_detail = tk.Label(f_body, text="Please wait while media is indexed and cryptographically verified.", font=("Tahoma", 8), bg="#ECE9D8", fg="#666666", anchor="w")
+        self.lbl_detail.pack(fill=tk.X)
+
+        self.top.protocol("WM_DELETE_WINDOW", lambda: None)
+        self.top.update()
+
+    def update_progress(self, percent=None, status_text=None, detail_text=None):
+        def _update():
+            try:
+                if not self.top.winfo_exists():
+                    return
+                if percent is not None:
+                    if self.pb.cget("mode") != "determinate":
+                        self.pb.configure(mode="determinate")
+                    self.pb.configure(value=percent)
+                else:
+                    if self.pb.cget("mode") != "indeterminate":
+                        self.pb.configure(mode="indeterminate")
+                    self.pb.step(8)
+                if status_text:
+                    self.lbl_status.config(text=status_text)
+                if detail_text:
+                    self.lbl_detail.config(text=detail_text)
+            except Exception:
+                pass
+
+        if self.dispatch_fn:
+            self.dispatch_fn(_update)
+        else:
+            try:
+                self.top.after(0, _update)
+            except Exception:
+                pass
+
+    def close(self):
+        def _close():
+            try:
+                self.top.grab_release()
+                self.top.destroy()
+            except Exception:
+                pass
+        if self.dispatch_fn:
+            self.dispatch_fn(_close)
+        else:
+            try:
+                self.top.after(0, _close)
+            except Exception:
+                pass
 
 
 class Win32DeviceStream:
@@ -237,6 +365,8 @@ class ProDiscoverApp:
         self.audit_log = []
         self.stop_requested = False
         self.loaded_evidence = {}
+        self.ui_queue = queue.Queue()
+        self.root.after(30, self._process_ui_queue)
 
         # Find compiled engine binary if available
         self.engine_bin = self._find_engine_binary()
@@ -388,6 +518,22 @@ class ProDiscoverApp:
             if os.path.isfile(c):
                 return c
         return None
+
+    def _process_ui_queue(self):
+        try:
+            while not self.ui_queue.empty():
+                fn, args, kwargs = self.ui_queue.get_nowait()
+                fn(*args, **kwargs)
+        except Exception:
+            pass
+        finally:
+            try:
+                self.root.after(30, self._process_ui_queue)
+            except Exception:
+                pass
+
+    def dispatch_to_ui(self, fn, *args, **kwargs):
+        self.ui_queue.put((fn, args, kwargs))
 
     def _setup_styles(self):
         self.style = ttk.Style()
@@ -744,6 +890,8 @@ class ProDiscoverApp:
     def _populate_tree_skeleton(self):
         self.tree.delete(*self.tree.get_children())
         self.loaded_evidence = {}
+        self.ui_queue = queue.Queue()
+        self.root.after(30, self._process_ui_queue)
         
         icon_folder = self.tree_icons.get("folder")
         icon_report = self.tree_icons.get("report")
@@ -799,11 +947,11 @@ class ProDiscoverApp:
 
         drives = []
         if sys.platform == "win32":
-            # 1. Physical Drives via PowerShell
+            # 1. Physical Drives via PowerShell (Silent, zero console window flash)
             try:
-                cmd = ["powershell", "-NoProfile", "-Command",
+                cmd = ["powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command",
                        "Get-CimInstance Win32_DiskDrive | Select-Object DeviceID, Model, Size, Partitions | ConvertTo-Json"]
-                out = subprocess.check_output(cmd, text=True, timeout=3)
+                out = silent_check_output(cmd, text=True, timeout=4)
                 data = json.loads(out)
                 if isinstance(data, dict):
                     data = [data]
@@ -1017,69 +1165,118 @@ class ProDiscoverApp:
             self.total_sectors = 1
 
         disp_title = disk_name if disk_name else (os.path.basename(path) if not is_device else path)
-        self.log_action(f"Opened forensic media: {disp_title} ({self.current_media_size:,} bytes)")
-        self.sb_engine.config(text="Computing MD5 hash...")
+        self.sb_engine.config(text=f"Importing forensic media: {disp_title}...")
         self.root.update_idletasks()
 
-        if is_device:
-            self.media_md5 = "Hardware Device (Compute on Acquisition)"
-            self.media_sha1 = "Hardware Device"
-            self.sb_hash.config(text="MD5: Live Device")
-        else:
-            h_md5 = hashlib.md5()
-            h_sha1 = hashlib.sha1()
+        # Non-blocking loading screen with progress animation
+        loading_dlg = LoadingDialog(
+            self.root,
+            dispatch_fn=self.dispatch_to_ui,
+            title="Importing Forensic Evidence",
+            message=f"Importing: {disp_title}"
+        )
+
+        def worker():
             try:
-                with open(self.current_media_path, "rb") as f:
-                    while chunk := f.read(1024 * 1024):
-                        h_md5.update(chunk)
-                        h_sha1.update(chunk)
-                self.media_md5 = h_md5.hexdigest()
-                self.media_sha1 = h_sha1.hexdigest()
-                self.sb_hash.config(text=f"MD5: {self.media_md5[:8]}... (Verified)")
-            except Exception:
-                self.media_md5 = "Hardware / Read Only"
-                self.media_sha1 = ""
-                self.sb_hash.config(text="MD5: Inactive")
+                t0 = time.time()
+                last_update = t0
+                if is_device:
+                    self.media_md5 = "Hardware Device (Compute on Acquisition)"
+                    self.media_sha1 = "Hardware Device"
+                    loading_dlg.update_progress(None, status_text="Connecting to raw storage device...", detail_text=f"Target: {path}")
+                    time.sleep(0.1)
+                else:
+                    h_md5 = hashlib.md5()
+                    h_sha1 = hashlib.sha1()
+                    bytes_hashed = 0
+                    total_bytes = self.current_media_size
+                    chunk_sz = 1024 * 1024
 
-        # Parse Filesystem
-        self._parse_media_filesystem()
+                    with open(self.current_media_path, "rb") as f:
+                        while chunk := f.read(chunk_sz):
+                            h_md5.update(chunk)
+                            h_sha1.update(chunk)
+                            bytes_hashed += len(chunk)
 
-        # Update Tree node
-        target_parent = self.node_disks if is_device else self.node_images
-        item_icon = self.tree_icons.get("disk") if is_device else self.tree_icons.get("image")
-        folder_icon = self.tree_icons.get("folder")
+                            now = time.time()
+                            if now - last_update >= 0.08 or bytes_hashed == total_bytes:
+                                elapsed = max(0.01, now - t0)
+                                speed_mb = (bytes_hashed / (1024 * 1024)) / elapsed
+                                pct = min(100.0, (bytes_hashed / max(1, total_bytes)) * 100.0)
+                                loading_dlg.update_progress(
+                                    percent=pct,
+                                    status_text=f"Computing cryptographic hashes: {pct:.1f}%",
+                                    detail_text=f"Processed: {bytes_hashed // (1024*1024):,} MB / {total_bytes // (1024*1024):,} MB ({speed_mb:.1f} MB/s)"
+                                )
+                                last_update = now
 
-        target_name = disk_name if disk_name else (os.path.basename(path) if not is_device else path)
-        if item_icon:
-            item_node = self.tree.insert(target_parent, "end", text=f"{target_name} [{self.fs_type}]", image=item_icon, open=True, tags=("loaded_media", norm_path))
-        else:
-            item_node = self.tree.insert(target_parent, "end", text=f"{target_name} [{self.fs_type}]", open=True, tags=("loaded_media", norm_path))
+                    self.media_md5 = h_md5.hexdigest()
+                    self.media_sha1 = h_sha1.hexdigest()
 
-        if folder_icon:
-            self.tree.insert(item_node, "end", text="Partition 0 [Root Directory]", image=folder_icon, tags=("partition_root", norm_path))
-        else:
-            self.tree.insert(item_node, "end", text="Partition 0 [Root Directory]", tags=("partition_root", norm_path))
+                # Step 2: Parse Filesystem
+                loading_dlg.update_progress(
+                    percent=None,
+                    status_text="Parsing filesystem tables and MFT records...",
+                    detail_text="Scanning volume boot record and allocating cluster chains..."
+                )
+                self._parse_media_filesystem()
 
-        self.loaded_evidence[norm_path] = {
-            "node_id": item_node,
-            "path": self.current_media_path,
-            "name": target_name,
-            "is_device": is_device,
-            "fs_type": self.fs_type
-        }
+                # Step 3: Complete and update UI on main thread
+                def on_complete():
+                    loading_dlg.close()
 
-        # Expand parent and select new evidence
-        self.tree.item(target_parent, open=True)
-        self.tree.item(self.node_content, open=True)
-        self.tree.selection_set(item_node)
-        self.tree.see(item_node)
+                    self.log_action(f"Opened forensic media: {disp_title} ({self.current_media_size:,} bytes)")
+                    if is_device:
+                        self.sb_hash.config(text="MD5: Live Device")
+                    else:
+                        self.sb_hash.config(text=f"MD5: {self.media_md5[:8]}... (Verified)")
 
-        self.root.title(f"ProDiscover Basic - [Project - {disp_title}]")
-        self.lbl_table_title.config(text=f"File List - [{disp_title}: Root Directory]")
-        self.sb_engine.config(text=f"Filesystem: {self.fs_type} (Native Win32 64-bit)")
+                    # Update Tree node
+                    target_parent = self.node_disks if is_device else self.node_images
+                    item_icon = self.tree_icons.get("disk") if is_device else self.tree_icons.get("image")
+                    folder_icon = self.tree_icons.get("folder")
 
-        self.render_table(self.current_files)
-        self.load_sector(0)
+                    target_name = disk_name if disk_name else (os.path.basename(path) if not is_device else path)
+                    if item_icon:
+                        item_node = self.tree.insert(target_parent, "end", text=f"{target_name} [{self.fs_type}]", image=item_icon, open=True, tags=("loaded_media", norm_path))
+                    else:
+                        item_node = self.tree.insert(target_parent, "end", text=f"{target_name} [{self.fs_type}]", open=True, tags=("loaded_media", norm_path))
+
+                    if folder_icon:
+                        self.tree.insert(item_node, "end", text="Partition 0 [Root Directory]", image=folder_icon, tags=("partition_root", norm_path))
+                    else:
+                        self.tree.insert(item_node, "end", text="Partition 0 [Root Directory]", tags=("partition_root", norm_path))
+
+                    self.loaded_evidence[norm_path] = {
+                        "node_id": item_node,
+                        "path": self.current_media_path,
+                        "name": target_name,
+                        "is_device": is_device,
+                        "fs_type": self.fs_type
+                    }
+
+                    # Expand parent and select new evidence
+                    self.tree.item(target_parent, open=True)
+                    self.tree.item(self.node_content, open=True)
+                    self.tree.selection_set(item_node)
+                    self.tree.see(item_node)
+
+                    self.root.title(f"ProDiscover Basic - [Project - {disp_title}]")
+                    self.lbl_table_title.config(text=f"File List - [{disp_title}: Root Directory]")
+                    self.sb_engine.config(text=f"Filesystem: {self.fs_type} (Native Win32 64-bit)")
+
+                    self.render_table(self.current_files)
+                    self.load_sector(0)
+
+                self.dispatch_to_ui(on_complete)
+
+            except Exception as err:
+                def on_error(e=err):
+                    loading_dlg.close()
+                    messagebox.showerror("Media Import Error", f"Failed to import forensic media:\n{e}", parent=self.root)
+                self.dispatch_to_ui(on_error)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _parse_media_filesystem(self):
         self.current_files = []
@@ -1358,7 +1555,7 @@ class ProDiscoverApp:
             ev_items = []
             if sys.platform == "win32":
                 try:
-                    out = subprocess.check_output(["wevtutil", "qe", "System", "/c:40", "/f:text"], text=True, errors="ignore", timeout=3)
+                    out = silent_check_output(["wevtutil", "qe", "System", "/c:40", "/f:text"], text=True, errors="ignore", timeout=3)
                     blocks = out.strip().split("Event[")
                     for b in blocks:
                         if not b.strip(): continue
@@ -1937,7 +2134,7 @@ class ProDiscoverApp:
         sb.pack(side=tk.RIGHT, fill=tk.Y)
         lb_disks.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        drives_list = self.get_system_drives(refresh=True)
+        drives_list = self.get_system_drives(refresh=False) or self.get_system_drives(refresh=True)
         for d in drives_list:
             lb_disks.insert(tk.END, d["display"])
 
@@ -2002,7 +2199,7 @@ class ProDiscoverApp:
         # 1. Source Drive
         tk.Label(dlg, text="Source Drive:", font=("Tahoma", 8), bg="#ECE9D8").place(x=15, y=14)
         
-        sys_drives = self.get_system_drives(refresh=True)
+        sys_drives = self.get_system_drives(refresh=False) or self.get_system_drives(refresh=True)
         drive_items = []
         if self.current_media_path:
             drive_items.append({
@@ -2799,7 +2996,7 @@ class ProDiscoverApp:
         dst = filedialog.asksaveasfilename(defaultextension=".xml", filetypes=[("XML Project (*.xml)", "*.xml")])
         if dst:
             if self.engine_bin:
-                subprocess.call([self.engine_bin, "export-project", self.current_media_path, dst])
+                silent_call([self.engine_bin, "export-project", self.current_media_path, dst])
                 messagebox.showinfo("Project Export", f"Project XML exported successfully to:\n{dst}")
             else:
                 with open(dst, "w") as f:
@@ -2813,7 +3010,7 @@ class ProDiscoverApp:
         dst = filedialog.asksaveasfilename(defaultextension=".html", filetypes=[("Forensic Report (*.html)", "*.html")])
         if dst:
             if self.engine_bin:
-                subprocess.call([self.engine_bin, "report", self.current_media_path, dst])
+                silent_call([self.engine_bin, "report", self.current_media_path, dst])
                 messagebox.showinfo("Report Generator", f"Court-ready forensic investigation report exported to:\n{dst}")
             else:
                 with open(dst, "w") as f:
@@ -3033,7 +3230,7 @@ class ProDiscoverApp:
         if sys.platform == "win32":
             try:
                 import csv, io
-                out = subprocess.check_output(["tasklist", "/fo", "csv"], text=True, errors="ignore", timeout=3)
+                out = silent_check_output(["tasklist", "/fo", "csv"], text=True, errors="ignore", timeout=3)
                 reader = csv.reader(io.StringIO(out))
                 for row in list(reader)[1:]:
                     if len(row) >= 5:
@@ -3090,7 +3287,7 @@ class ProDiscoverApp:
         socks = []
         if sys.platform == "win32":
             try:
-                out = subprocess.check_output(["netstat", "-ano"], text=True, errors="ignore", timeout=3)
+                out = silent_check_output(["netstat", "-ano"], text=True, errors="ignore", timeout=3)
                 for line in out.splitlines():
                     p = line.split()
                     if len(p) >= 5 and p[0].upper() in ("TCP", "UDP"):
@@ -3148,7 +3345,7 @@ class ProDiscoverApp:
         arps = []
         if sys.platform == "win32":
             try:
-                out = subprocess.check_output(["arp", "-a"], text=True, errors="ignore", timeout=3)
+                out = silent_check_output(["arp", "-a"], text=True, errors="ignore", timeout=3)
                 cur_iface = "Default"
                 for line in out.splitlines():
                     line = line.strip()
