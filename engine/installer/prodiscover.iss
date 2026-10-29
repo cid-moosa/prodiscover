@@ -32,13 +32,13 @@ DisableProgramGroupPage=auto
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 Name: "associate"; Description: "Associate ProDiscover with .eve, .dd, and .pds evidence files"; GroupDescription: "File associations:"
 
 [Files]
 Source: "..\..\builds\bin\prodiscover.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\gui\assets\*"; DestDir: "{app}\assets"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "..\..\README.md"; DestDir: "{app}"; Flags: ignoreversion isreadme
+Source: "..\..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\ProDiscover Basic"; Filename: "{app}\prodiscover.exe"; IconFilename: "{app}\assets\prodiscover.ico"; WorkingDir: "{app}"
