@@ -1,6 +1,20 @@
 # ProDiscover Basic & IR - Modern Forensic Reconstruction
 
-![ProDiscover Fedora Detective Icon](docs/images/prodiscover_logo.png)
+<p align="center">
+  <img src="docs/images/prodiscover_logo.png" alt="ProDiscover Fedora Detective Icon" width="120" />
+</p>
+
+<p align="center">
+  <a href="https://github.com/cid-moosa/prodiscover/releases/download/v1.0.0/ProDiscover_Setup.exe">
+    <img src="https://img.shields.io/badge/Download_Installer-ProDiscover__Setup.exe-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Download Windows Setup" />
+  </a>
+  <a href="https://github.com/cid-moosa/prodiscover/releases/download/v1.0.0/ProDiscover_Setup_v1.0.0.zip">
+    <img src="https://img.shields.io/badge/Download_Portable_ZIP-ProDiscover__Setup.zip-2EA44F?style=for-the-badge&logo=archive&logoColor=white" alt="Download ZIP Package" />
+  </a>
+  <a href="https://github.com/cid-moosa/prodiscover/releases/latest">
+    <img src="https://img.shields.io/github/v/release/cid-moosa/prodiscover?style=for-the-badge&color=blue" alt="Latest Release" />
+  </a>
+</p>
 
 ### The Classic ProDiscover Forensic & Incident Response Suite
 *Pixel-Faithful Modern 64-Bit Reconstruction*
@@ -42,11 +56,10 @@ This software is an educational and forensic-grade reconstruction of the legacy 
 - **Bottom Pane (Hex & ASCII Data Inspector):** Real-time sector-paginated data viewer (Offset, 16-byte Hex representation, ASCII decode, Jump to Sector, cluster slack boundary markers).
 
 ### 3. Incident Response (Live System Triage)
-- **Live Process Inspection:** Active process list with PID, memory usage, session ID, and executable name via native OS queries (	asklist).
-- **Active Network Sockets:** Real-time TCP/UDP connection state table with local/foreign IP addresses, port numbers, and owning PIDs (
-etstat).
-- **Physical ARP Cache:** Extraction of network hardware MAC-to-IP bindings for physical network analysis (rp -a).
-- **Live Registry & Event Logs:** Live inspection of Windows hives (CurrentVersion, ComputerName, USBSTOR device history) and Windows Event Logs (wevtutil).
+- **Live Process Inspection:** Active process list with PID, memory usage, session ID, and executable name via native OS queries (`tasklist`).
+- **Active Network Sockets:** Real-time TCP/UDP connection state table with local/foreign IP addresses, port numbers, and owning PIDs (`netstat`).
+- **Physical ARP Cache:** Extraction of network hardware MAC-to-IP bindings for physical network analysis (`arp -a`).
+- **Live Registry & Event Logs:** Live inspection of Windows hives (CurrentVersion, ComputerName, USBSTOR device history) and Windows Event Logs (`wevtutil`).
 
 ### 4. Advanced Forensic Analysis Tools
 - **Automated Sector-Level File Carver:** Recovers deleted or unallocated files matching binary signatures (JPEG FF D8 FF, PNG 89 50 4E 47, PDF %PDF, ZIP/DOCX/XLSX 50 4B 03 04, GIF 47 49 46 38).
@@ -59,7 +72,7 @@ etstat).
 
 ## Repository Structure
 
-`
+```text
 prodiscover/
 |-- .gitignore                      # Git ignore rules (protects binaries and memory)
 |-- README.md                       # Repository documentation
@@ -79,7 +92,7 @@ prodiscover/
         |-- hash/                   # MD5 / SHA1 hashing routines
         |-- registry/               # Windows Registry parser
         -- search/                 # Disk sector pattern search
-`
+```
 
 ---
 
@@ -101,22 +114,22 @@ Download the latest standalone setup installer from [GitHub Releases](https://gi
 - **Administrator Privileges:** Direct physical drive acquisition (\\.\PhysicalDriveX) requires running the terminal or executable as Administrator.
 
 ### Running from Source
-`powershell
+```powershell
 # Clone the repository
 git clone https://github.com/cid-moosa/prodiscover.git
 cd prodiscover
 
 # Launch the ProDiscover Forensic Suite
 python engine/gui/prodiscover_app.py
-`
+```
 
 ### Compiling Standalone Executable
 To package the suite into a single, self-contained Windows executable without external dependencies:
 
-`powershell
+```powershell
 pip install pyinstaller pillow
 pyinstaller --noconfirm --onedir --windowed --name prodiscover --icon engine/gui/assets/hat.ico --add-data 'engine/gui/assets;assets' engine/gui/prodiscover_app.py
-`
+```
 
 The compiled binary will be placed in dist/prodiscover/prodiscover.exe.
 
@@ -126,11 +139,10 @@ The compiled binary will be placed in dist/prodiscover/prodiscover.exe.
 
 The acquisition engine was rigorously validated through automated differential tests against verified reference disk images:
 
-- **Source Evidence:** 
-eferance/prodiskovey/Sample Images/FATSearchTestImage.eve (15,728,640 bytes, 30,720 sectors)
-- **Acquired Image:** uilds/acquired_test.dd
-- **Source MD5:** ac12239bd466fa6c86ceb0b0426da0a
-- **Acquired MD5:** ac12239bd466fa6c86ceb0b0426da0a
+- **Source Evidence:** `referance/prodiskovey/Sample Images/FATSearchTestImage.eve` (15,728,640 bytes, 30,720 sectors)
+- **Acquired Image:** `builds/acquired_test.dd`
+- **Source MD5:** `bac12239bd466fa6c86ceb0b0426da0a`
+- **Acquired MD5:** `bac12239bd466fa6c86ceb0b0426da0a`
 - **Differential Verification:** **Identical (True) - 0.00% Data Loss Verified.**
 
 ---
