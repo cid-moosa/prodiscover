@@ -85,6 +85,16 @@ prodiscover/
 
 ## Getting Started
 
+### Windows Pre-Built Installer
+Download the latest standalone setup installer from [GitHub Releases](https://github.com/cid-moosa/prodiscover/releases/tag/v1.0.0):
+- **Setup Executable:** [ProDiscover_Setup.exe](https://github.com/cid-moosa/prodiscover/releases/download/v1.0.0/ProDiscover_Setup.exe) (Digitally Signed Authenticode)
+- **ZIP Release:** [ProDiscover_Setup_v1.0.0.zip](https://github.com/cid-moosa/prodiscover/releases/download/v1.0.0/ProDiscover_Setup_v1.0.0.zip)
+
+> [!NOTE]
+> **Windows Defender SmartScreen (Blue Notification)**: Because this is a fresh open-source release without cloud download telemetry, Windows Defender SmartScreen displays a blue *"Windows protected your PC"* screen for unrecognized newly downloaded files.
+> - **To run directly:** Click **"More info"**, then click **"Run anyway"**.
+> - **Zero-Prompt Alternative:** Extract `ProDiscover_Setup_v1.0.0.zip` and double-click `Install_ProDiscover.bat`.
+
 ### Prerequisites
 - **Operating System:** Windows 10, Windows 11 (64-bit), or Linux (Ubuntu, Debian, Fedora, Arch)
 - **Python:** Python 3.10 or higher
