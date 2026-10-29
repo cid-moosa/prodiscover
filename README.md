@@ -1,5 +1,12 @@
 # ProDiscover Basic & IR - Modern Forensic Reconstruction
 
+![ProDiscover Fedora Detective Icon](docs/images/prodiscover_logo.png)
+
+### The Classic ProDiscover Forensic & Incident Response Suite
+*Pixel-Faithful Modern 64-Bit Reconstruction*
+
+![ProDiscover Classic Forensic Interface](docs/images/prodiscover_ui.png)
+
 A pixel-faithful, bit-exact native 64-bit desktop forensic suite reconstructing the classic **ProDiscover Basic & Incident Response (IR)** platform. Designed for modern Windows 10/11 (64-bit) and Linux systems, maintaining strict adherence to the original MFC interface and forensic workflows while delivering modern reliability, high-speed acquisition, and zero data loss.
 
 > [!WARNING]
@@ -21,6 +28,9 @@ This software is an educational and forensic-grade reconstruction of the legacy 
 ## Features & Forensic Capabilities
 
 ### 1. Bit-Stream Disk Acquisition & Imaging
+
+![ProDiscover Bit-Stream Disk Capture Dialog](docs/images/prodiscover_capture_dialog.png)
+
 - Direct acquisition from physical drives (\\.\PhysicalDrive0, \\.\PhysicalDrive1) and logical volumes (\\.\C:, \\.\D:).
 - Forensic raw image formats: .eve (ProDiscover monolithic or segmented) and .dd (Raw bit-stream).
 - Configurable multi-segment splitting (640MB CD, 2GB FAT, 4GB DVD, or custom byte sizes).
