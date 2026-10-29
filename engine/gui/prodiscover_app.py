@@ -19,6 +19,8 @@ import xml.etree.ElementTree as ET
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
 from PIL import Image, ImageTk
+import ctypes
+from ctypes import wintypes
 
 try:
     import pywinstyles
