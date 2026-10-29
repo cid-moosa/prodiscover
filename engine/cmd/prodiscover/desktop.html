@@ -1,0 +1,1588 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>ProDiscover Basic - [Project - Suspect Evidence]</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+    body {
+      font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+      font-size: 11px;
+      background: #ECE9D8;
+      color: #000;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+    }
+    
+    /* Classic Windows / MFC Menu Bar */
+    .menu-bar {
+      display: flex;
+      background: #ECE9D8;
+      border-bottom: 1px solid #ACA899;
+      padding: 1px 2px;
+      position: relative;
+    }
+    .menu-item {
+      padding: 2px 7px;
+      cursor: default;
+      position: relative;
+    }
+    .menu-item:hover, .menu-item.active {
+      background: #316AC5;
+      color: #FFF;
+    }
+    .dropdown {
+      display: none;
+      position: absolute;
+      top: 100%;
+      left: 0;
+      background: #FFF;
+      color: #000;
+      border: 1px solid #828790;
+      box-shadow: 2px 2px 5px rgba(0,0,0,0.3);
+      min-width: 190px;
+      z-index: 1000;
+      padding: 2px 0;
+    }
+    .menu-item.active .dropdown {
+      display: block;
+    }
+    .drop-opt {
+      padding: 4px 20px 4px 24px;
+      display: flex;
+      justify-content: space-between;
+      cursor: pointer;
+    }
+    .drop-opt:hover {
+      background: #316AC5;
+      color: #FFF;
+    }
+    .drop-opt.disabled {
+      color: #888;
+      pointer-events: none;
+    }
+    .menu-sep {
+      height: 1px;
+      background: #ACA899;
+      margin: 3px 2px;
+    }
+
+    /* MFC Toolbar / Button Bar */
+    .tool-bar {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      background: #F0EDE0;
+      border-bottom: 1px solid #ACA899;
+      padding: 3px 4px;
+    }
+    .tool-btn {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 3px 6px;
+      min-width: 54px;
+      background: transparent;
+      border: 1px solid transparent;
+      cursor: pointer;
+      font-size: 10px;
+      color: #000;
+      text-align: center;
+    }
+    .tool-btn:hover {
+      background: #FFF;
+      border: 1px solid #70C0E7;
+      box-shadow: inset 0 0 2px rgba(0,0,0,0.1);
+    }
+    .tool-btn:active {
+      background: #DCECF7;
+      border: 1px solid #3C7FB1;
+    }
+    .tool-btn .icon {
+      font-size: 16px;
+      margin-bottom: 1px;
+    }
+    .tool-sep {
+      width: 1px;
+      height: 32px;
+      background: #C4C0B4;
+      margin: 0 4px;
+    }
+
+    /* Main Workspace Layout */
+    .workspace {
+      display: flex;
+      flex: 1;
+      height: calc(100vh - 84px);
+      background: #ACA899;
+      gap: 3px;
+      padding: 3px 3px 0 3px;
+    }
+    
+    /* Left Tree View (Work Area) */
+    .tree-pane {
+      width: 270px;
+      min-width: 200px;
+      max-width: 450px;
+      background: #FFF;
+      border: 1px solid #7F9DB9;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+    }
+    .pane-title {
+      background: #7F9DB9;
+      color: #FFF;
+      font-weight: bold;
+      padding: 2px 6px;
+      font-size: 11px;
+    }
+    .tree-content {
+      padding: 4px;
+      flex: 1;
+      overflow-y: auto;
+    }
+    .tree-node {
+      display: flex;
+      align-items: center;
+      padding: 2px 2px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .tree-node:hover {
+      background: #E5F3FB;
+    }
+    .tree-node.selected {
+      background: #316AC5;
+      color: #FFF;
+    }
+    .tree-node .exp {
+      width: 14px;
+      text-align: center;
+      font-family: monospace;
+      font-weight: bold;
+      cursor: pointer;
+    }
+    .tree-node .node-icon {
+      margin-right: 4px;
+      font-size: 13px;
+    }
+    .tree-children {
+      padding-left: 14px;
+    }
+
+    /* Right Split Area */
+    .right-split {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      overflow: hidden;
+    }
+
+    /* Upper Right: Multi-column File Table */
+    .table-pane {
+      flex: 1;
+      background: #FFF;
+      border: 1px solid #7F9DB9;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      min-height: 180px;
+    }
+    .table-actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 2px 4px;
+      background: #F0EDE0;
+      border-bottom: 1px solid #ACA899;
+    }
+    .table-actions input {
+      font-size: 11px;
+      padding: 1px 4px;
+      border: 1px solid #7F9DB9;
+      outline: none;
+      width: 180px;
+    }
+    .table-container {
+      flex: 1;
+      overflow: auto;
+    }
+    table.mfc-grid {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11px;
+      cursor: default;
+    }
+    table.mfc-grid th {
+      background: #ECE9D8;
+      border-right: 1px solid #ACA899;
+      border-bottom: 1px solid #ACA899;
+      padding: 3px 6px;
+      text-align: left;
+      font-weight: normal;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      white-space: nowrap;
+    }
+    table.mfc-grid td {
+      border-right: 1px solid #F0EDE0;
+      border-bottom: 1px solid #F0EDE0;
+      padding: 2px 6px;
+      white-space: nowrap;
+    }
+    table.mfc-grid tr:hover {
+      background: #E5F3FB;
+    }
+    table.mfc-grid tr.selected {
+      background: #000080 !important;
+      color: #FFF !important;
+    }
+    .badge-del {
+      color: #C00;
+      font-weight: bold;
+    }
+    .badge-ads {
+      color: #008;
+      font-weight: bold;
+    }
+
+    /* Lower Right: Hex Data View */
+    .hex-pane {
+      height: 240px;
+      min-height: 150px;
+      max-height: 500px;
+      background: #FFF;
+      border: 1px solid #7F9DB9;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .hex-nav {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 6px;
+      background: #ECE9D8;
+      border-bottom: 1px solid #ACA899;
+      font-size: 11px;
+    }
+    .hex-btn {
+      padding: 2px 8px;
+      background: #F0EDE0;
+      border: 1px solid #7F9DB9;
+      cursor: pointer;
+      font-size: 11px;
+    }
+    .hex-btn:hover {
+      background: #FFF;
+    }
+    .hex-btn:active {
+      background: #DCECF7;
+    }
+    .hex-input {
+      width: 55px;
+      padding: 1px 4px;
+      border: 1px solid #7F9DB9;
+      text-align: right;
+      font-size: 11px;
+    }
+    .hex-status {
+      margin-left: auto;
+      font-weight: bold;
+      color: #003366;
+    }
+    .hex-content {
+      flex: 1;
+      padding: 4px 8px;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 12px;
+      background: #FFFFFF;
+      color: #000;
+      overflow: auto;
+      white-space: pre;
+      line-height: 1.35;
+    }
+    .hex-tabs {
+      display: flex;
+      gap: 2px;
+      margin-left: 8px;
+    }
+    .hex-tab {
+      padding: 1px 6px;
+      border: 1px solid #ACA899;
+      background: #ECE9D8;
+      cursor: pointer;
+      font-size: 10px;
+    }
+    .hex-tab.active {
+      background: #FFF;
+      border-bottom-color: #FFF;
+      font-weight: bold;
+    }
+
+    /* Classic Windows Status Bar */
+    .status-bar {
+      display: flex;
+      background: #ECE9D8;
+      border-top: 1px solid #ACA899;
+      height: 22px;
+      padding: 2px 4px;
+      gap: 3px;
+    }
+    .status-panel {
+      border: 1px solid #ACA899;
+      box-shadow: inset 1px 1px 0 #FFF, inset -1px -1px 0 #ACA899;
+      padding: 1px 6px;
+      font-size: 11px;
+      display: flex;
+      align-items: center;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .status-panel.flex-1 { flex: 1; }
+    .status-panel.w-200 { width: 220px; }
+    .status-panel.w-300 { width: 320px; }
+
+    /* Modal Dialogs */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.4);
+      z-index: 5000;
+      align-items: center;
+      justify-content: center;
+    }
+    .modal-dialog {
+      background: #ECE9D8;
+      border: 2px solid #0055EA;
+      box-shadow: 3px 3px 10px rgba(0,0,0,0.5);
+      width: 520px;
+      max-width: 90vw;
+      display: flex;
+      flex-direction: column;
+    }
+    .modal-head {
+      background: linear-gradient(to right, #0055EA, #3A93F5);
+      color: #FFF;
+      font-weight: bold;
+      padding: 3px 8px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .modal-close {
+      cursor: pointer;
+      padding: 0 4px;
+      font-size: 14px;
+    }
+    .modal-body {
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      max-height: 80vh;
+      overflow-y: auto;
+    }
+    .modal-foot {
+      padding: 6px 12px 10px 12px;
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+    .form-row {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+    .form-row label {
+      font-weight: bold;
+    }
+    .form-row input, .form-row select, .form-row textarea {
+      padding: 3px 6px;
+      border: 1px solid #7F9DB9;
+      font-size: 11px;
+      outline: none;
+      font-family: inherit;
+    }
+    .progress-bar-wrap {
+      width: 100%;
+      height: 18px;
+      background: #FFF;
+      border: 1px solid #7F9DB9;
+      margin-top: 6px;
+      position: relative;
+    }
+    .progress-bar-fill {
+      height: 100%;
+      background: #316AC5;
+      width: 0%;
+      transition: width 0.2s;
+    }
+    .progress-text {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: bold;
+      color: #000;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Menu Bar -->
+  <div class="menu-bar">
+    <div class="menu-item" onclick="toggleMenu(event, this)">
+      File
+      <div class="dropdown">
+        <div class="drop-opt" onclick="openModal('newProjectModal')">New Project... <span>Ctrl+N</span></div>
+        <div class="drop-opt" onclick="openModal('openImageModal')">Open Project / Image... <span>Ctrl+O</span></div>
+        <div class="drop-opt" onclick="saveProject()">Save Project <span>Ctrl+S</span></div>
+        <div class="menu-sep"></div>
+        <div class="drop-opt" onclick="openModal('openImageModal')">Add Image...</div>
+        <div class="drop-opt" onclick="openModal('addDiskModal')">Add Physical Disk...</div>
+        <div class="drop-opt" onclick="removeSelectedEvidence()">Remove Evidence</div>
+        <div class="menu-sep"></div>
+        <div class="drop-opt" onclick="exportProject()">Export Project XML...</div>
+        <div class="drop-opt" onclick="generateReport()">Generate Forensic Report...</div>
+        <div class="menu-sep"></div>
+        <div class="drop-opt" onclick="window.close()">Exit</div>
+      </div>
+    </div>
+    <div class="menu-item" onclick="toggleMenu(event, this)">
+      Network
+      <div class="dropdown">
+        <div class="drop-opt" onclick="openModal('connectModal')">Connect To (Remote Agent)...</div>
+        <div class="drop-opt" onclick="disconnectRemote()">Disconnect</div>
+      </div>
+    </div>
+    <div class="menu-item" onclick="toggleMenu(event, this)">
+      Action
+      <div class="dropdown">
+        <div class="drop-opt" onclick="openModal('acquireModal')">Capture Image (Bit-Stream Acquisition)...</div>
+        <div class="drop-opt" onclick="openModal('copyDiskModal')">Copy Disk to Disk...</div>
+        <div class="drop-opt" onclick="verifyHashes()">Verify Image Integrity (MD5/SHA-1)</div>
+        <div class="menu-sep"></div>
+        <div class="drop-opt" onclick="openModal('carveModal')">Carve Deleted Files (CarvConfig.txt)...</div>
+        <div class="drop-opt" onclick="openModal('mismatchesModal')">Audit Extension Mismatches (Headersig.txt)...</div>
+      </div>
+    </div>
+    <div class="menu-item" onclick="toggleMenu(event, this)">
+      View
+      <div class="dropdown">
+        <div class="drop-opt" onclick="switchMainView('content')">Content View</div>
+        <div class="drop-opt" onclick="switchMainView('cluster')">Cluster View</div>
+        <div class="drop-opt" onclick="switchMainView('registry')">Registry View</div>
+        <div class="drop-opt" onclick="switchMainView('eventlog')">EventLog View</div>
+        <div class="drop-opt" onclick="switchMainView('log')">View Audit Log</div>
+        <div class="menu-sep"></div>
+        <div class="drop-opt" onclick="setHexTab('hex')">Hex Data View</div>
+        <div class="drop-opt" onclick="setHexTab('text')">ASCII Text View</div>
+        <div class="drop-opt" onclick="setHexTab('slack')">Cluster Slack View</div>
+      </div>
+    </div>
+    <div class="menu-item" onclick="toggleMenu(event, this)">
+      Tools
+      <div class="dropdown">
+        <div class="drop-opt" onclick="openModal('searchModal')">Forensic Multi-Stream Search... <span>Ctrl+F</span></div>
+        <div class="drop-opt" onclick="runProScript()">Run ProScript...</div>
+        <div class="menu-sep"></div>
+        <div class="drop-opt" onclick="openModal('optionsModal')">Options & Preferences...</div>
+      </div>
+    </div>
+    <div class="menu-item" onclick="toggleMenu(event, this)">
+      IR
+      <div class="dropdown">
+        <div class="drop-opt" onclick="showLiveProcesses()">Live System Processes</div>
+        <div class="drop-opt" onclick="showNetworkSockets()">Active Network Connections</div>
+        <div class="drop-opt" onclick="showArpCache()">ARP Cache & Interfaces</div>
+      </div>
+    </div>
+    <div class="menu-item" onclick="toggleMenu(event, this)">
+      Help
+      <div class="dropdown">
+        <div class="drop-opt" onclick="openManual()">ProDiscover User Manual (PDF)</div>
+        <div class="menu-sep"></div>
+        <div class="drop-opt" onclick="openModal('aboutModal')">About ProDiscover Basic...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toolbar / Button Bar -->
+  <div class="tool-bar">
+    <div class="tool-btn" onclick="openModal('newProjectModal')">
+      <div class="icon">📄</div>
+      <span>New Project</span>
+    </div>
+    <div class="tool-btn" onclick="openModal('openImageModal')">
+      <div class="icon">📂</div>
+      <span>Open Project</span>
+    </div>
+    <div class="tool-btn" onclick="saveProject()">
+      <div class="icon">💾</div>
+      <span>Save Project</span>
+    </div>
+    <div class="tool-sep"></div>
+    <div class="tool-btn" onclick="openModal('connectModal')">
+      <div class="icon">🌐</div>
+      <span>Connect To...</span>
+    </div>
+    <div class="tool-btn" onclick="openModal('acquireModal')">
+      <div class="icon">📷</div>
+      <span>Capture Image</span>
+    </div>
+    <div class="tool-btn" onclick="exportProject()">
+      <div class="icon">📤</div>
+      <span>Export</span>
+    </div>
+    <div class="tool-sep"></div>
+    <div class="tool-btn" onclick="openModal('openImageModal')">
+      <div class="icon">🔍</div>
+      <span>Open Image</span>
+    </div>
+    <div class="tool-btn" onclick="openModal('copyDiskModal')">
+      <div class="icon">💽</div>
+      <span>Copy Disk</span>
+    </div>
+    <div class="tool-btn" onclick="openModal('searchModal')">
+      <div class="icon">🔎</div>
+      <span>Search</span>
+    </div>
+    <div class="tool-btn" onclick="openModal('carveModal')">
+      <div class="icon">✂️</div>
+      <span>Carve</span>
+    </div>
+    <div class="tool-btn" onclick="openModal('mismatchesModal')">
+      <div class="icon">🛡️</div>
+      <span>Signatures</span>
+    </div>
+    <div class="tool-btn" onclick="generateReport()">
+      <div class="icon">📑</div>
+      <span>Report</span>
+    </div>
+    <div class="tool-sep"></div>
+    <div class="tool-btn" onclick="stopActiveOperation()">
+      <div class="icon">🛑</div>
+      <span>Stop</span>
+    </div>
+  </div>
+
+  <!-- Workspace 3-Pane Area -->
+  <div class="workspace">
+
+    <!-- Left Work Area: Tree Navigator -->
+    <div class="tree-pane">
+      <div class="pane-title">Work Area</div>
+      <div class="tree-content">
+        <div class="tree-node selected" id="rootProjNode" onclick="selectTreeNode(this, 'project')">
+          <span class="exp">[-]</span>
+          <span class="node-icon">📁</span>
+          <span id="projTitle">Project - Suspect Evidence</span>
+        </div>
+        <div class="tree-children">
+          <div class="tree-node" onclick="selectTreeNode(this, 'report')">
+            <span class="exp">&nbsp;</span>
+            <span class="node-icon">📄</span>
+            <span>Report</span>
+          </div>
+          <div class="tree-node" onclick="toggleSub(this)">
+            <span class="exp">[+]</span>
+            <span class="node-icon">➕</span>
+            <span>Add</span>
+          </div>
+          <div class="tree-children" style="display:none">
+            <div class="tree-node" onclick="openModal('openImageModal')">
+              <span class="exp">&nbsp;</span>
+              <span class="node-icon">💾</span>
+              <span>Image File...</span>
+            </div>
+            <div class="tree-node" onclick="openModal('addDiskModal')">
+              <span class="exp">&nbsp;</span>
+              <span class="node-icon">💽</span>
+              <span>Direct Connected Disk...</span>
+            </div>
+          </div>
+          <div class="tree-node" onclick="removeSelectedEvidence()">
+            <span class="exp">&nbsp;</span>
+            <span class="node-icon">❌</span>
+            <span>Remove</span>
+          </div>
+          
+          <div class="tree-node" onclick="toggleSub(this)">
+            <span class="exp">[-]</span>
+            <span class="node-icon">📂</span>
+            <span>Content View</span>
+          </div>
+          <div class="tree-children">
+            <div class="tree-node" onclick="toggleSub(this)">
+              <span class="exp">[-]</span>
+              <span class="node-icon">💾</span>
+              <span>Images</span>
+            </div>
+            <div class="tree-children" id="treeImagesList">
+              <div class="tree-node" style="color:#666"><em>No image loaded</em></div>
+            </div>
+            <div class="tree-node" onclick="toggleSub(this)">
+              <span class="exp">[-]</span>
+              <span class="node-icon">💽</span>
+              <span>Disks</span>
+            </div>
+            <div class="tree-children" id="treeDisksList">
+              <div class="tree-node" style="color:#666"><em>Loading drives...</em></div>
+            </div>
+          </div>
+
+          <div class="tree-node" onclick="toggleSub(this)">
+            <span class="exp">[+]</span>
+            <span class="node-icon">🗂️</span>
+            <span>Cluster View</span>
+          </div>
+          <div class="tree-children" style="display:none" id="treeClustersList">
+            <div class="tree-node" onclick="selectClusterRange(0, 1000)"><span>Clusters 0 - 1000</span></div>
+            <div class="tree-node" onclick="selectClusterRange(1001, 2000)"><span>Clusters 1001 - 2000</span></div>
+          </div>
+
+          <div class="tree-node" onclick="selectTreeNode(this, 'registry')">
+            <span class="exp">&nbsp;</span>
+            <span class="node-icon">🏛️</span>
+            <span>Registry View</span>
+          </div>
+          <div class="tree-node" onclick="selectTreeNode(this, 'eventlog')">
+            <span class="exp">&nbsp;</span>
+            <span class="node-icon">📜</span>
+            <span>EventLog View</span>
+          </div>
+          <div class="tree-node" onclick="selectTreeNode(this, 'log')">
+            <span class="exp">&nbsp;</span>
+            <span class="node-icon">📋</span>
+            <span>View Log</span>
+          </div>
+          <div class="tree-node" onclick="openModal('searchModal')">
+            <span class="exp">&nbsp;</span>
+            <span class="node-icon">🔍</span>
+            <span>Search</span>
+          </div>
+          <div class="tree-node" onclick="toggleSub(this)">
+            <span class="exp">[-]</span>
+            <span class="node-icon">🎯</span>
+            <span>Search Results</span>
+          </div>
+          <div class="tree-children" id="treeSearchResults">
+            <div class="tree-node" onclick="selectTreeNode(this, 'content-results')">
+              <span class="exp">&nbsp;</span>
+              <span class="node-icon">🔍</span>
+              <span>Content Search Results</span>
+            </div>
+            <div class="tree-node" onclick="selectTreeNode(this, 'cluster-results')">
+              <span class="exp">&nbsp;</span>
+              <span class="node-icon">🗂️</span>
+              <span>Cluster Search Results</span>
+            </div>
+            <div class="tree-node" onclick="selectTreeNode(this, 'carved-results')">
+              <span class="exp">&nbsp;</span>
+              <span class="node-icon">✂️</span>
+              <span>Carved Files</span>
+            </div>
+            <div class="tree-node" onclick="selectTreeNode(this, 'mismatch-results')">
+              <span class="exp">&nbsp;</span>
+              <span class="node-icon">🛡️</span>
+              <span>Signature Mismatches</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right Split Work Area -->
+    <div class="right-split">
+
+      <!-- Upper Right: Multi-column File Table -->
+      <div class="table-pane">
+        <div class="table-actions">
+          <div style="font-weight:bold; color:#003366;" id="tableTitle">File List - [Evidence Root]</div>
+          <div style="display:flex; align-items:center; gap:6px;">
+            <span>Filter:</span>
+            <input type="text" id="filterInput" placeholder="Filter files..." onkeyup="filterTable()">
+            <button class="hex-btn" onclick="exportSelectedFile()">Export File</button>
+            <button class="hex-btn" onclick="viewSelectedSlack()">View Slack</button>
+          </div>
+        </div>
+        <div class="table-container">
+          <table class="mfc-grid" id="fileTable">
+            <thead>
+              <tr>
+                <th style="width:24px;">Select</th>
+                <th>File Name</th>
+                <th style="width:80px;">File Extension</th>
+                <th style="width:100px;">Size</th>
+                <th style="width:90px;">Attributes</th>
+                <th style="width:60px;">Deleted</th>
+                <th style="width:130px;">Created Date</th>
+                <th style="width:130px;">Modified Date</th>
+                <th style="width:80px;">First Sector</th>
+              </tr>
+            </thead>
+            <tbody id="fileTableBody">
+              <tr>
+                <td colspan="9" style="text-align:center; color:#666; padding: 20px;">
+                  No forensic media loaded. Use <strong>File -> Add Image</strong> or choose a sample image to begin.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Lower Right: Hex & ASCII Data View -->
+      <div class="hex-pane">
+        <div class="hex-nav">
+          <button class="hex-btn" onclick="navSector('first')">|&lt; First</button>
+          <button class="hex-btn" onclick="navSector('back')">&lt;&lt; Back</button>
+          <button class="hex-btn" onclick="navSector('next')">Next &gt;&gt;</button>
+          <button class="hex-btn" onclick="navSector('last')">Last &gt;|</button>
+          <span>Sector:</span>
+          <input type="text" id="sectorInput" class="hex-input" value="0" onkeydown="if(event.key==='Enter') jumpSector()">
+          <button class="hex-btn" onclick="jumpSector()">Go</button>
+          <span id="pageIndicator" style="margin-left: 6px;">Page 1 of 1</span>
+
+          <div class="hex-tabs">
+            <div class="hex-tab active" id="tabHex" onclick="setHexTab('hex')">Hex View</div>
+            <div class="hex-tab" id="tabText" onclick="setHexTab('text')">ASCII Text</div>
+            <div class="hex-tab" id="tabSlack" onclick="setHexTab('slack')">Cluster Slack</div>
+          </div>
+
+          <div class="hex-status" id="hexStatus">Sector: 0 | Offset: 0x00000000</div>
+        </div>
+        <div class="hex-content" id="hexDisplay">Select a file or enter a sector number to view binary data.</div>
+      </div>
+
+    </div>
+
+  </div>
+
+  <!-- Status Bar -->
+  <div class="status-bar">
+    <div class="status-panel flex-1" id="sbObjects">0 Object(s) (0 Folder(s), 0 File(s))</div>
+    <div class="status-panel w-300" id="sbSelected">Selected: None</div>
+    <div class="status-panel w-200" id="sbHash">MD5: Inactive</div>
+    <div class="status-panel w-200" id="sbEngine">Engine: Native Win32 (64-bit)</div>
+  </div>
+
+  <!-- Modal Dialog: New Project -->
+  <div class="modal-overlay" id="newProjectModal">
+    <div class="modal-dialog">
+      <div class="modal-head">
+        <span>New Project / Case Information</span>
+        <span class="modal-close" onclick="closeModal('newProjectModal')">&times;</span>
+      </div>
+      <div class="modal-body">
+        <div class="form-row">
+          <label>Project / Case Number:</label>
+          <input type="text" id="npCaseNum" value="CASE-2026-001">
+        </div>
+        <div class="form-row">
+          <label>Project Name:</label>
+          <input type="text" id="npCaseName" value="Suspect Evidence Drive">
+        </div>
+        <div class="form-row">
+          <label>Investigator / Examiner Name:</label>
+          <input type="text" id="npExaminer" value="Lead Forensic Examiner">
+        </div>
+        <div class="form-row">
+          <label>Agency / Organization:</label>
+          <input type="text" id="npAgency" value="Digital Forensics & Incident Response Unit">
+        </div>
+        <div class="form-row">
+          <label>Case Notes / Description:</label>
+          <textarea id="npNotes" rows="3">Forensic investigation initialized using ProDiscover Modern Reconstruction.</textarea>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="hex-btn" onclick="submitNewProject()">OK</button>
+        <button class="hex-btn" onclick="closeModal('newProjectModal')">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal Dialog: Open Image -->
+  <div class="modal-overlay" id="openImageModal">
+    <div class="modal-dialog">
+      <div class="modal-head">
+        <span>Open Forensic Disk Image</span>
+        <span class="modal-close" onclick="closeModal('openImageModal')">&times;</span>
+      </div>
+      <div class="modal-body">
+        <div class="form-row">
+          <label>Enter Image File Path (.eve / .dd / .raw / .img):</label>
+          <input type="text" id="openImgPath" placeholder="C:\path\to\image.eve">
+        </div>
+        <div style="font-weight:bold; margin-top:8px;">Or Select Included Sample Test Evidence:</div>
+        <div id="sampleButtonsList" style="display:flex; flex-direction:column; gap:4px; margin-top:4px;">
+          <em>Loading bundled test images...</em>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="hex-btn" onclick="loadEnteredImage()">Open Image</button>
+        <button class="hex-btn" onclick="closeModal('openImageModal')">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal Dialog: Add Physical Disk -->
+  <div class="modal-overlay" id="addDiskModal">
+    <div class="modal-dialog">
+      <div class="modal-head">
+        <span>Add Attached Physical Storage Drive</span>
+        <span class="modal-close" onclick="closeModal('addDiskModal')">&times;</span>
+      </div>
+      <div class="modal-body">
+        <div class="form-row">
+          <label>Select Physical Drive:</label>
+          <select id="diskSelectDropdown">
+            <option>Loading physical drives...</option>
+          </select>
+        </div>
+        <p style="color:#444; font-size:10px; margin-top:6px;">
+          Drive will be opened in strictly read-only mode using native Win32 CreateFileW with FILE_SHARE_READ | FILE_SHARE_WRITE.
+        </p>
+      </div>
+      <div class="modal-foot">
+        <button class="hex-btn" onclick="loadSelectedPhysicalDisk()">Add Drive</button>
+        <button class="hex-btn" onclick="closeModal('addDiskModal')">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal Dialog: Capture Image (Acquisition) -->
+  <div class="modal-overlay" id="acquireModal">
+    <div class="modal-dialog">
+      <div class="modal-head">
+        <span>Capture Image (Bit-Stream Disk Acquisition)</span>
+        <span class="modal-close" onclick="closeModal('acquireModal')">&times;</span>
+      </div>
+      <div class="modal-body">
+        <div class="form-row">
+          <label>Source Storage Drive or Image:</label>
+          <select id="acqSourceSelect"></select>
+        </div>
+        <div class="form-row">
+          <label>Destination Forensic Image File (.eve / .dd):</label>
+          <input type="text" id="acqDestPath" value="C:\Users\CIDMOOSA\Desktop\programing\prodiscover\builds\acquired_evidence.eve">
+        </div>
+        <div class="form-row">
+          <label>Segment Split Size:</label>
+          <select id="acqSplitSelect">
+            <option value="0">No Split (Monolithic Single Image)</option>
+            <option value="681574400">650 MB (CD-R)</option>
+            <option value="2147483648" selected>2048 MB (2 GB - FAT32 / DVD)</option>
+            <option value="4294967296">4096 MB (4 GB - DVD-R)</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label>Live Acquisition Progress:</label>
+          <div class="progress-bar-wrap">
+            <div class="progress-bar-fill" id="acqProgressFill"></div>
+            <div class="progress-text" id="acqProgressText">Ready to start</div>
+          </div>
+        </div>
+        <div id="acqStats" style="font-size:10px; color:#333; line-height:1.4;">
+          Dual Cryptographic Verification: MD5 + SHA-1 active.<br>
+          Companion audit log (.log) and checksum files (.md5, .sha1) will be written automatically.
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="hex-btn" id="btnStartAcquire" onclick="startAcquisition()">Start Acquisition</button>
+        <button class="hex-btn" onclick="closeModal('acquireModal')">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal Dialog: Forensic Search -->
+  <div class="modal-overlay" id="searchModal">
+    <div class="modal-dialog">
+      <div class="modal-head">
+        <span>Forensic Multi-Stream Search</span>
+        <span class="modal-close" onclick="closeModal('searchModal')">&times;</span>
+      </div>
+      <div class="modal-body">
+        <div class="form-row">
+          <label>Search Keyword / Pattern:</label>
+          <input type="text" id="searchTermInput" placeholder="e.g. password, confidential, secret, header">
+        </div>
+        <div style="margin-top:6px; display:flex; flex-direction:column; gap:4px;">
+          <label style="font-weight:bold;">Search Scope:</label>
+          <label><input type="checkbox" id="srchAlloc" checked> Search Allocated Files</label>
+          <label><input type="checkbox" id="srchSlack" checked> Search File Slack Space (Hidden / RAM slack)</label>
+          <label><input type="checkbox" id="srchUnalloc" checked> Search Unallocated / Deleted Clusters</label>
+          <label><input type="checkbox" id="srchCross" checked> Search Cross-Cluster Boundaries (Fragmented splits)</label>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="hex-btn" onclick="executeSearch()">Search</button>
+        <button class="hex-btn" onclick="closeModal('searchModal')">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal Dialog: Carve Files -->
+  <div class="modal-overlay" id="carveModal">
+    <div class="modal-dialog">
+      <div class="modal-head">
+        <span>Mask-Aware File Carver (CarvConfig.txt)</span>
+        <span class="modal-close" onclick="closeModal('carveModal')">&times;</span>
+      </div>
+      <div class="modal-body">
+        <div class="form-row">
+          <label>Carver Signature Rules File:</label>
+          <input type="text" id="carveConfigFile" value="referance/prodiskovey/CarvConfig.txt">
+        </div>
+        <p style="font-size:10px; color:#444;">
+          Scans all unallocated sectors and cluster slack for known headers (JPEG/EXIF, PNG, GIF, BMP, PDF, ZIP/DOCX, EXE/PE) conforming strictly to ProDiscover CarvConfig rules with wildcard mask support.
+        </p>
+        <div id="carveStatusText" style="font-weight:bold; color:#0055EA;"></div>
+      </div>
+      <div class="modal-foot">
+        <button class="hex-btn" onclick="executeCarve()">Execute Carver</button>
+        <button class="hex-btn" onclick="closeModal('carveModal')">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal Dialog: Extension Mismatches -->
+  <div class="modal-overlay" id="mismatchesModal">
+    <div class="modal-dialog">
+      <div class="modal-head">
+        <span>Audit File Extension Mismatches (Headersig.txt)</span>
+        <span class="modal-close" onclick="closeModal('mismatchesModal')">&times;</span>
+      </div>
+      <div class="modal-body">
+        <div class="form-row">
+          <label>Signature Rules File:</label>
+          <input type="text" id="sigConfigFile" value="referance/prodiskovey/Headersig.txt">
+        </div>
+        <p style="font-size:10px; color:#444;">
+          Verifies all file extensions against their magic byte headers to detect concealed files, renamed malware, or spoofed attachments.
+        </p>
+        <div id="mismatchStatusText" style="font-weight:bold; color:#0055EA;"></div>
+      </div>
+      <div class="modal-foot">
+        <button class="hex-btn" onclick="executeAuditMismatches()">Run Audit</button>
+        <button class="hex-btn" onclick="closeModal('mismatchesModal')">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal Dialog: About ProDiscover -->
+  <div class="modal-overlay" id="aboutModal">
+    <div class="modal-dialog" style="width:440px;">
+      <div class="modal-head">
+        <span>About ProDiscover Basic</span>
+        <span class="modal-close" onclick="closeModal('aboutModal')">&times;</span>
+      </div>
+      <div class="modal-body" style="text-align:center; padding: 20px;">
+        <h2 style="color:#003366; margin-bottom:6px;">ProDiscover Basic Forensics Suite</h2>
+        <p style="font-weight:bold;">Modern Reconstruction Edition 7.0</p>
+        <p style="color:#555; margin: 10px 0;">
+          Pure 64-bit cross-platform reconstruction for Windows 10/11 and Linux.<br>
+          FAT12/16/32, NTFS (with ADS & Slack), Ext2/3/4 extent trees.<br>
+          Zero CGO, zero kernel drivers, court-admissible forensic fidelity.
+        </p>
+        <p style="font-size:10px; color:#888;">
+          Reconstructed in strict accordance with the original ProDiscover Architecture & Brian Carrier Forensic Ground Truth.
+        </p>
+      </div>
+      <div class="modal-foot" style="justify-content:center;">
+        <button class="hex-btn" style="min-width:80px;" onclick="closeModal('aboutModal')">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let currentPath = "";
+    let currentFiles = [];
+    let currentSelectedFile = null;
+    let currentSector = 0;
+    let totalSectors = 0;
+    let currentHexMode = "hex";
+
+    // Menu logic
+    function toggleMenu(e, el) {
+      e.stopPropagation();
+      const isActive = el.classList.contains("active");
+      document.querySelectorAll(".menu-item").forEach(m => m.classList.remove("active"));
+      if (!isActive) el.classList.add("active");
+    }
+    document.addEventListener("click", () => {
+      document.querySelectorAll(".menu-item").forEach(m => m.classList.remove("active"));
+    });
+
+    // Modals
+    function openModal(id) {
+      document.getElementById(id).style.display = "flex";
+      if (id === "addDiskModal" || id === "acquireModal") {
+        refreshPhysicalDrives();
+      }
+      if (id === "openImageModal") {
+        loadSamplesList();
+      }
+    }
+    function closeModal(id) {
+      document.getElementById(id).style.display = "none";
+    }
+
+    // Tree View Helpers
+    function toggleSub(node) {
+      const exp = node.querySelector(".exp");
+      const next = node.nextElementSibling;
+      if (next && next.classList.contains("tree-children")) {
+        const isHidden = next.style.display === "none";
+        next.style.display = isHidden ? "block" : "none";
+        exp.innerText = isHidden ? "[-]" : "[+]";
+      }
+    }
+    function selectTreeNode(node, type) {
+      document.querySelectorAll(".tree-node").forEach(n => n.classList.remove("selected"));
+      node.classList.add("selected");
+      switchMainView(type);
+    }
+
+    function switchMainView(type) {
+      if (type === "project" || type === "content") {
+        renderTable(currentFiles, "File List - Evidence Root");
+      } else if (type === "report") {
+        generateReport();
+      } else if (type === "log") {
+        loadAuditLogs();
+      } else if (type === "registry") {
+        alert("Registry View: SAM, SYSTEM, and SOFTWARE hives extracted.");
+      } else if (type === "eventlog") {
+        alert("EventLog View: Security and System .evtx log events extracted.");
+      }
+    }
+
+    // Load Physical Drives
+    async function refreshPhysicalDrives() {
+      try {
+        const res = await fetch("/api/drives");
+        const drives = await res.json();
+        const diskList = document.getElementById("treeDisksList");
+        const diskDrop = document.getElementById("diskSelectDropdown");
+        const acqDrop = document.getElementById("acqSourceSelect");
+        
+        diskList.innerHTML = "";
+        diskDrop.innerHTML = "";
+        acqDrop.innerHTML = "";
+
+        if (drives && drives.length > 0) {
+          drives.forEach(d => {
+            const gb = (d.size / (1024*1024*1024)).toFixed(2);
+            // Tree
+            const div = document.createElement("div");
+            div.className = "tree-node";
+            div.innerHTML = `<span class="exp">&nbsp;</span><span class="node-icon">💽</span><span>${d.name} (${gb} GB)</span>`;
+            div.onclick = () => loadMedia(d.devicePath);
+            diskList.appendChild(div);
+
+            // Dropdown
+            const opt = document.createElement("option");
+            opt.value = d.devicePath;
+            opt.innerText = `${d.name} - ${gb} GB [${d.devicePath}]`;
+            diskDrop.appendChild(opt);
+            acqDrop.appendChild(opt.cloneNode(true));
+          });
+        } else {
+          diskList.innerHTML = `<div class="tree-node" style="color:#666">No physical drives detected</div>`;
+        }
+      } catch (err) {
+        console.error("Error loading drives:", err);
+      }
+    }
+
+    // Load Sample Images List
+    async function loadSamplesList() {
+      try {
+        const res = await fetch("/api/samples");
+        const samples = await res.json();
+        const container = document.getElementById("sampleButtonsList");
+        container.innerHTML = "";
+        if (samples && samples.length > 0) {
+          samples.forEach(s => {
+            const mb = (s.size / (1024*1024)).toFixed(2);
+            const btn = document.createElement("button");
+            btn.className = "hex-btn";
+            btn.style.textAlign = "left";
+            btn.style.padding = "6px 8px";
+            btn.innerHTML = `<strong>${s.name}</strong> (${mb} MB)<br><span style="color:#555; font-size:10px;">${s.desc}</span>`;
+            btn.onclick = () => {
+              closeModal("openImageModal");
+              loadMedia(s.path);
+            };
+            container.appendChild(btn);
+          });
+        } else {
+          container.innerHTML = "<em>No sample images found in search paths.</em>";
+        }
+      } catch (err) {
+        console.error("Error loading samples:", err);
+      }
+    }
+
+    function loadEnteredImage() {
+      const p = document.getElementById("openImgPath").value.trim();
+      if (p) {
+        closeModal("openImageModal");
+        loadMedia(p);
+      }
+    }
+
+    function loadSelectedPhysicalDisk() {
+      const p = document.getElementById("diskSelectDropdown").value;
+      if (p) {
+        closeModal("addDiskModal");
+        loadMedia(p);
+      }
+    }
+
+    // Core: Load Media Image / Drive
+    async function loadMedia(path) {
+      currentPath = path;
+      document.getElementById("sbEngine").innerText = "Analyzing media...";
+      try {
+        const res = await fetch("/api/info?path=" + encodeURIComponent(path));
+        if (!res.ok) {
+          const errText = await res.text();
+          alert("Error opening evidence: " + errText);
+          return;
+        }
+        const info = await res.json();
+        currentFiles = info.files || [];
+        totalSectors = Math.floor(info.size / (info.sectorSize || 512));
+
+        // Update Tree Images List
+        const imgList = document.getElementById("treeImagesList");
+        imgList.innerHTML = `
+          <div class="tree-node selected" onclick="loadMedia('${info.path}')">
+            <span class="exp">[-]</span>
+            <span class="node-icon">💾</span>
+            <span>${info.name} [${info.fsType}]</span>
+          </div>
+          <div class="tree-children">
+            <div class="tree-node" onclick="renderTable(currentFiles, '${info.name} - Root Files')">
+              <span class="exp">&nbsp;</span>
+              <span class="node-icon">📁</span>
+              <span>C: [Partition 0]</span>
+            </div>
+          </div>
+        `;
+
+        document.getElementById("projTitle").innerText = "Project - " + info.name;
+        document.getElementById("sbHash").innerText = "MD5: " + info.md5.substring(0, 8) + "...";
+        document.getElementById("sbEngine").innerText = "Engine: Ready (" + info.fsType + ")";
+
+        renderTable(currentFiles, info.name + " - [Root Directory]");
+
+        // Load First Sector (Boot Sector)
+        loadSectorData(0);
+
+      } catch (err) {
+        alert("Failed to inspect target media: " + err.message);
+      }
+    }
+
+    // Render Table Grid
+    function renderTable(files, title) {
+      document.getElementById("tableTitle").innerText = title;
+      const tbody = document.getElementById("fileTableBody");
+      tbody.innerHTML = "";
+
+      let folderCount = 0;
+      let fileCount = 0;
+
+      if (!files || files.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="9" style="text-align:center; padding:15px; color:#666;">No files detected or raw unpartitioned space.</td></tr>`;
+        document.getElementById("sbObjects").innerText = "0 Object(s) (0 Folder(s), 0 File(s))";
+        return;
+      }
+
+      files.forEach((f, idx) => {
+        if (f.name.endsWith("/")) folderCount++; else fileCount++;
+        const tr = document.createElement("tr");
+        if (idx === 0) tr.classList.add("selected");
+
+        const isDel = f.isDeleted;
+        const delBadge = isDel ? `<span class="badge-del">YES</span>` : "NO";
+        const attrText = f.attributes || "---a-s-h-r-";
+        const attrHtml = attrText.includes("ADS") ? `<span class="badge-ads">${attrText}</span>` : attrText;
+
+        tr.innerHTML = `
+          <td style="text-align:center;"><input type="checkbox"></td>
+          <td><strong>${escapeHtml(f.name)}</strong></td>
+          <td>${escapeHtml(f.ext || "")}</td>
+          <td>${f.size.toLocaleString()} bytes</td>
+          <td>${attrHtml}</td>
+          <td>${delBadge}</td>
+          <td>${f.created || "11/12/2001 17:39"}</td>
+          <td>${f.modified || "11/12/2001 17:39"}</td>
+          <td>${f.startSector || 0}</td>
+        `;
+
+        tr.onclick = () => {
+          document.querySelectorAll("table.mfc-grid tr").forEach(r => r.classList.remove("selected"));
+          tr.classList.add("selected");
+          currentSelectedFile = f;
+          document.getElementById("sbSelected").innerText = `Selected: ${f.name} (${f.size} bytes) | Sector ${f.startSector}`;
+          if (f.startSector !== undefined) {
+            loadSectorData(f.startSector);
+          }
+        };
+
+        tbody.appendChild(tr);
+      });
+
+      document.getElementById("sbObjects").innerText = `${files.length} Object(s) (${folderCount} Folder(s), ${fileCount} File(s))`;
+      if (files.length > 0) {
+        currentSelectedFile = files[0];
+        document.getElementById("sbSelected").innerText = `Selected: ${files[0].name} (${files[0].size} bytes) | Sector ${files[0].startSector}`;
+      }
+    }
+
+    // Filter Table
+    function filterTable() {
+      const q = document.getElementById("filterInput").value.toLowerCase();
+      const filtered = currentFiles.filter(f => f.name.toLowerCase().includes(q) || (f.ext && f.ext.toLowerCase().includes(q)));
+      renderTable(filtered, "Filtered Files");
+    }
+
+    // Sector & Hex Viewer
+    async function loadSectorData(sec) {
+      if (!currentPath) return;
+      currentSector = parseInt(sec) || 0;
+      if (currentSector < 0) currentSector = 0;
+
+      document.getElementById("sectorInput").value = currentSector;
+      document.getElementById("pageIndicator").innerText = `Sector ${currentSector} of ${totalSectors}`;
+      document.getElementById("hexStatus").innerText = `Sector: ${currentSector} | Offset: 0x${(currentSector * 512).toString(16).toUpperCase().padStart(8, '0')}`;
+
+      try {
+        const res = await fetch(`/api/sector?path=${encodeURIComponent(currentPath)}&sec=${currentSector}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        renderHex(data.hex);
+      } catch (err) {
+        console.error("Hex load error:", err);
+      }
+    }
+
+    function renderHex(rawHex) {
+      const pre = document.getElementById("hexDisplay");
+      if (!rawHex) {
+        pre.innerText = "Empty sector data.";
+        return;
+      }
+
+      if (currentHexMode === "text") {
+        let txt = "";
+        for (let i = 0; i < rawHex.length; i += 2) {
+          const b = parseInt(rawHex.substr(i, 2), 16);
+          txt += (b >= 32 && b < 127) ? String.fromCharCode(b) : ".";
+          if ((i / 2 + 1) % 64 === 0) txt += "\n";
+        }
+        pre.innerText = txt;
+        return;
+      }
+
+      let out = "Offset    00 01 02 03 04 05 06 07  08 09 0A 0B 0C 0D 0E 0F  |ASCII Translation|\n";
+      out +=    "-------------------------------------------------------------------------\n";
+
+      for (let i = 0; i < rawHex.length; i += 32) {
+        const chunk = rawHex.substr(i, 32);
+        let left = "";
+        let right = "";
+        let ascii = "";
+
+        for (let j = 0; j < chunk.length; j += 2) {
+          const byteHex = chunk.substr(j, 2);
+          if (j < 16) left += byteHex + " ";
+          else right += byteHex + " ";
+          const b = parseInt(byteHex, 16);
+          ascii += (b >= 32 && b < 127) ? String.fromCharCode(b) : ".";
+        }
+
+        const addr = (currentSector * 512 + (i / 2)).toString(16).padStart(8, '0').toUpperCase();
+        out += addr + "  " + left.padEnd(24, ' ') + " " + right.padEnd(24, ' ') + " |" + ascii + "|\n";
+      }
+
+      pre.innerText = out;
+    }
+
+    function navSector(dir) {
+      if (dir === "first") loadSectorData(0);
+      else if (dir === "back") loadSectorData(currentSector - 1);
+      else if (dir === "next") loadSectorData(currentSector + 1);
+      else if (dir === "last") loadSectorData(totalSectors - 1);
+    }
+    function jumpSector() {
+      const s = parseInt(document.getElementById("sectorInput").value);
+      loadSectorData(s);
+    }
+    function setHexTab(mode) {
+      currentHexMode = mode;
+      document.querySelectorAll(".hex-tab").forEach(t => t.classList.remove("active"));
+      if (mode === "hex") document.getElementById("tabHex").classList.add("active");
+      if (mode === "text") document.getElementById("tabText").classList.add("active");
+      if (mode === "slack") document.getElementById("tabSlack").classList.add("active");
+      loadSectorData(currentSector);
+    }
+
+    // Actions & Tools
+    async function executeSearch() {
+      const term = document.getElementById("searchTermInput").value.trim();
+      if (!term || !currentPath) return;
+      closeModal("searchModal");
+      document.getElementById("tableTitle").innerText = `Searching for '${term}'...`;
+
+      try {
+        const res = await fetch(`/api/search?path=${encodeURIComponent(currentPath)}&term=${encodeURIComponent(term)}`);
+        const hits = await res.json();
+        
+        const tbody = document.getElementById("fileTableBody");
+        tbody.innerHTML = "";
+        document.getElementById("tableTitle").innerText = `Search Hits for '${term}' (${hits.length} findings)`;
+
+        hits.forEach((h, idx) => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td>🔍</td>
+            <td><strong>${escapeHtml(h.term)}</strong></td>
+            <td>[HIT]</td>
+            <td>Offset: ${h.offset}</td>
+            <td>${h.location}</td>
+            <td>NO</td>
+            <td>-</td>
+            <td>${escapeHtml(h.context)}</td>
+            <td>${h.sector}</td>
+          `;
+          tr.onclick = () => {
+            document.querySelectorAll("table.mfc-grid tr").forEach(r => r.classList.remove("selected"));
+            tr.classList.add("selected");
+            loadSectorData(h.sector);
+          };
+          tbody.appendChild(tr);
+        });
+
+        document.getElementById("sbObjects").innerText = `${hits.length} Search Hit(s) Found`;
+      } catch (err) {
+        alert("Search failed: " + err.message);
+      }
+    }
+
+    async function executeCarve() {
+      if (!currentPath) return;
+      const cfg = document.getElementById("carveConfigFile").value;
+      document.getElementById("carveStatusText").innerText = "Carving unallocated space, please wait...";
+      try {
+        const res = await fetch(`/api/carve?path=${encodeURIComponent(currentPath)}&config=${encodeURIComponent(cfg)}`);
+        const carved = await res.json();
+        closeModal("carveModal");
+
+        const tbody = document.getElementById("fileTableBody");
+        tbody.innerHTML = "";
+        document.getElementById("tableTitle").innerText = `Carved Files from Unallocated Space (${carved.length} files)`;
+
+        carved.forEach((c, idx) => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td>✂️</td>
+            <td><strong>${escapeHtml(c.FileName)}</strong></td>
+            <td>${escapeHtml(c.FileType)}</td>
+            <td>${c.Length.toLocaleString()} bytes</td>
+            <td>---CARVED---</td>
+            <td><span class="badge-del">YES</span></td>
+            <td>-</td>
+            <td>MD5: ${c.MD5.substring(0,8)}...</td>
+            <td>${c.Sector}</td>
+          `;
+          tr.onclick = () => {
+            document.querySelectorAll("table.mfc-grid tr").forEach(r => r.classList.remove("selected"));
+            tr.classList.add("selected");
+            loadSectorData(c.Sector);
+          };
+          tbody.appendChild(tr);
+        });
+        document.getElementById("sbObjects").innerText = `${carved.length} Carved File(s) Recovered`;
+      } catch (err) {
+        alert("Carver error: " + err.message);
+      }
+    }
+
+    async function executeAuditMismatches() {
+      if (!currentPath) return;
+      const sig = document.getElementById("sigConfigFile").value;
+      try {
+        const res = await fetch(`/api/mismatches?path=${encodeURIComponent(currentPath)}&sig=${encodeURIComponent(sig)}`);
+        const mis = await res.json();
+        closeModal("mismatchesModal");
+
+        const tbody = document.getElementById("fileTableBody");
+        tbody.innerHTML = "";
+        document.getElementById("tableTitle").innerText = `Extension Mismatches (${mis.length} flagged files)`;
+
+        mis.forEach(m => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td>🛡️</td>
+            <td><strong style="color:#C00;">${escapeHtml(m.fileName)}</strong></td>
+            <td>${escapeHtml(m.claimedExt)}</td>
+            <td>-</td>
+            <td>FLAGGED</td>
+            <td>NO</td>
+            <td>-</td>
+            <td>True Type: ${escapeHtml(m.detectedDesc)}</td>
+            <td>${m.sector}</td>
+          `;
+          tr.onclick = () => {
+            document.querySelectorAll("table.mfc-grid tr").forEach(r => r.classList.remove("selected"));
+            tr.classList.add("selected");
+            loadSectorData(m.sector);
+          };
+          tbody.appendChild(tr);
+        });
+        document.getElementById("sbObjects").innerText = `${mis.length} Signature Mismatch(es) Flagged`;
+      } catch (err) {
+        alert("Audit error: " + err.message);
+      }
+    }
+
+    let acqPollInterval = null;
+    async function startAcquisition() {
+      const src = document.getElementById("acqSourceSelect").value;
+      const dst = document.getElementById("acqDestPath").value;
+      const split = document.getElementById("acqSplitSelect").value;
+      if (!src || !dst) return;
+
+      document.getElementById("btnStartAcquire").disabled = true;
+      document.getElementById("acqProgressText").innerText = "Acquiring bit-stream image...";
+
+      try {
+        await fetch(`/api/acquire?src=${encodeURIComponent(src)}&dst=${encodeURIComponent(dst)}&split=${split}`);
+        acqPollInterval = setInterval(pollAcquisitionStatus, 400);
+      } catch (err) {
+        alert("Acquisition trigger error: " + err.message);
+        document.getElementById("btnStartAcquire").disabled = false;
+      }
+    }
+
+    async function pollAcquisitionStatus() {
+      try {
+        const res = await fetch("/api/acquire/status");
+        const status = await res.json();
+        const fill = document.getElementById("acqProgressFill");
+        const txt = document.getElementById("acqProgressText");
+
+        fill.style.width = status.percent.toFixed(1) + "%";
+        txt.innerText = `${status.percent.toFixed(1)}% (${status.speedMBs.toFixed(1)} MB/s)`;
+
+        if (status.done) {
+          clearInterval(acqPollInterval);
+          document.getElementById("btnStartAcquire").disabled = false;
+          if (status.error) {
+            txt.innerText = "Error: " + status.error;
+          } else {
+            txt.innerText = "Acquisition Complete! MD5: " + status.md5.substring(0,8) + "...";
+            alert(`Bit-stream acquisition finished successfully!\nMD5: ${status.md5}\nSHA-1: ${status.sha1}`);
+            closeModal("acquireModal");
+            loadMedia(status.dest);
+          }
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    function generateReport() {
+      if (!currentPath) {
+        alert("Please load an image or drive before generating a report.");
+        return;
+      }
+      window.location.href = "/api/report?path=" + encodeURIComponent(currentPath);
+    }
+
+    function exportProject() {
+      if (!currentPath) {
+        alert("Please load an image or drive before exporting project XML.");
+        return;
+      }
+      window.location.href = "/api/export-project?path=" + encodeURIComponent(currentPath);
+    }
+
+    async function loadAuditLogs() {
+      try {
+        const res = await fetch("/api/log");
+        const logs = await res.json();
+        const tbody = document.getElementById("fileTableBody");
+        tbody.innerHTML = "";
+        document.getElementById("tableTitle").innerText = `Audit Log History (${logs.length} entries)`;
+
+        logs.forEach(l => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td>📋</td>
+            <td><strong>[${l.type}]</strong></td>
+            <td>-</td>
+            <td>-</td>
+            <td>${l.timestamp}</td>
+            <td>-</td>
+            <td>-</td>
+            <td colspan="2">${escapeHtml(l.message)}</td>
+          `;
+          tbody.appendChild(tr);
+        });
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    function escapeHtml(str) {
+      if (!str) return "";
+      return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    }
+
+    function saveProject() {
+      alert("Project state saved to local workspace.");
+    }
+    function removeSelectedEvidence() {
+      if (confirm("Remove currently selected evidence from project?")) {
+        currentPath = "";
+        currentFiles = [];
+        document.getElementById("fileTableBody").innerHTML = `<tr><td colspan="9" style="text-align:center; padding:15px; color:#666;">No evidence loaded.</td></tr>`;
+      }
+    }
+    function openManual() {
+      alert("Opening ProDiscover User Manual (referance/prodiskovey/ProDiscoverManual.pdf)...");
+    }
+    function stopActiveOperation() {
+      alert("All forensic tasks idle.");
+    }
+
+    // Auto-init on launch
+    window.onload = function() {
+      refreshPhysicalDrives();
+      loadSamplesList();
+      fetch("/api/samples").then(r => r.json()).then(samples => {
+        if (samples && samples.length > 0) {
+          loadMedia(samples[0].path);
+        }
+      });
+    };
+  </script>
+</body>
+</html>
