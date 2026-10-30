@@ -70,6 +70,7 @@ Type: dirifempty; Name: "{app}"
 
 [Run]
 Filename: "{app}\prodiscover.exe"; Description: "{cm:LaunchProgram,ProDiscover Basic}"; Flags: nowait postinstall skipifsilent shellexec
+Filename: "https://github.com/cid-moosa/prodiscover/issues"; Description: "Report an issue, bug, or feedback on GitHub (Opens Browser)"; Flags: shellexec postinstall unchecked
 
 [Code]
 procedure InitializeWizard;
@@ -98,6 +99,11 @@ begin
     WizardForm.FinishedHeadingLabel.Width := WizardForm.WelcomeLabel1.Width;
     WizardForm.FinishedLabel.Left := WizardForm.WelcomeLabel2.Left;
     WizardForm.FinishedLabel.Width := WizardForm.WelcomeLabel2.Width;
+    WizardForm.FinishedLabel.Caption :=
+      'Setup has finished installing ProDiscover Basic & IR on your computer.' + #13#10#13#10 +
+      'Help Us Test ProDiscover:' + #13#10 +
+      'If you encounter any bugs, crashes, or evidence parsing errors during your testing, please report them to our GitHub Issue Tracker so we can debug and fix them:' + #13#10 +
+      'https://github.com/cid-moosa/prodiscover/issues';
     if Assigned(WizardForm.RunList) then
     begin
       WizardForm.RunList.Left := WizardForm.WelcomeLabel2.Left;

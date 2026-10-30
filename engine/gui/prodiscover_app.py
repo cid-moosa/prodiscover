@@ -24,6 +24,10 @@ from tkinter import ttk, filedialog, messagebox, simpledialog
 from PIL import Image, ImageTk
 import ctypes
 from ctypes import wintypes
+import traceback
+import webbrowser
+import urllib.parse
+import platform
 
 try:
     import pywinstyles
@@ -1488,9 +1492,16 @@ class ProDiscoverApp:
         # Help Menu
         help_menu = tk.Menu(self.menubar, tearoff=0)
         help_menu.add_command(label="ProDiscover User Manual (PDF)", command=self.action_open_manual)
+        help_menu.add_command(label="Forensic Architecture & Overview...", command=self.dlg_about)
+        help_menu.add_separator()
+        help_menu.add_command(label="Report an Issue or Bug (GitHub)...", command=self.action_report_issue)
+        help_menu.add_command(label="Submit Feedback / Feature Request...", command=self.action_submit_feedback)
+        help_menu.add_command(label="View GitHub Repository...", command=self.action_open_github)
+        help_menu.add_command(label="Check for Updates (GitHub Releases)...", command=self.action_check_updates)
+        help_menu.add_separator()
         help_menu.add_command(label="Launch Dialog...", command=self.dlg_launch)
         help_menu.add_separator()
-        help_menu.add_command(label="About ProDiscover Basic...", command=self.dlg_about)
+        help_menu.add_command(label="About ProDiscover Basic & IR...", command=self.dlg_about)
         self.menubar.add_cascade(label="Help", menu=help_menu)
 
         self.root.config(menu=self.menubar)
@@ -2194,9 +2205,10 @@ class ProDiscoverApp:
                 self.dispatch_to_ui(on_complete)
 
             except Exception as err:
-                def on_error(e=err):
+                tb_str = traceback.format_exc()
+                def on_error(e=err, tb=tb_str):
                     loading_dlg.close()
-                    messagebox.showerror("Media Import Error", f"Failed to import forensic media:\n{e}", parent=self.root)
+                    self.show_error_with_report("Media Import Error", f"Failed to import forensic media: {e}", error_details=tb)
                 self.dispatch_to_ui(on_error)
 
         threading.Thread(target=worker, daemon=True).start()
@@ -3804,7 +3816,7 @@ class ProDiscoverApp:
                         pass
                     prog_dlg.after(0, lambda err=ex: (
                         prog_dlg.destroy(),
-                        messagebox.showerror("Acquisition Error", f"An error occurred during acquisition:\n{err}", parent=dlg)
+                        self.show_error_with_report("Disk Acquisition Error", f"An error occurred during disk acquisition:\n{err}", error_details=str(err))
                     ))
 
             threading.Thread(target=worker, daemon=True).start()
@@ -4797,7 +4809,7 @@ class ProDiscoverApp:
                     return
 
                 if engine.error:
-                    messagebox.showerror("Acquisition Error", f"Live physical memory acquisition failed:\n\n{engine.error}", parent=self.root)
+                    self.show_error_with_report("Live Memory Acquisition Error", f"Live physical memory acquisition failed:\n\n{engine.error}", error_details=str(engine.error))
                     return
 
                 bytes_c = engine.bytes_acquired
@@ -4893,15 +4905,477 @@ class ProDiscoverApp:
     def dlg_options(self):
         messagebox.showinfo("Options", "ProDiscover Basic Forensics Environment Preferences.")
 
-    def dlg_about(self):
-        messagebox.showinfo(
-            "About ProDiscover Basic",
-            "ProDiscover Basic / IR Modern Forensic Reconstruction 7.0\n\n"
-            "Bit-by-Bit Functional Reconstruction of the classic ProDiscover DFIR Suite.\n"
-            "Pure 64-bit Native Desktop Software (Windows 10/11 & Linux).\n"
-            "Zero localhost - Zero web servers - Zero browser wrappers.\n\n"
-            "Cryptographic Hashing, FAT/NTFS/ExtFS, Slack Space, Mask-Aware Carver, ADS."
+    def _get_diagnostic_info(self):
+        try:
+            lines = [
+                "ProDiscover Version: 1.0.0 Modern Forensic Reconstruction (Build 2026.10)",
+                f"OS: {platform.system()} {platform.release()} ({platform.version()})",
+                f"Architecture: {platform.machine()} ({'64-bit' if sys.maxsize > 2**32 else '32-bit'})",
+                f"Python: {platform.python_version()} ({platform.architecture()[0]})",
+                f"Tkinter: {tk.TkVersion}",
+            ]
+            mem = get_system_memory_status()
+            if mem:
+                tot_gb = mem.get("total_gb", 0)
+                avail_gb = mem.get("avail_gb", 0)
+                load_pct = mem.get("load_pct", 0)
+                lines.append(f"Physical Memory: {tot_gb:.2f} GB Total | {avail_gb:.2f} GB Available ({load_pct}% load)")
+            if getattr(self, "current_media_path", None):
+                lines.append(f"Active Media: {os.path.basename(self.current_media_path)} ({getattr(self, 'fs_type', 'Unknown')}, {getattr(self, 'total_sectors', 0)} sectors)")
+            return "\n".join(lines)
+        except Exception as e:
+            return f"Diagnostic capture error: {e}"
+
+    def action_report_issue(self, title: str = "", body: str = ""):
+        repo_url = "https://github.com/cid-moosa/prodiscover/issues/new"
+        params = {}
+        if title:
+            params["title"] = title
+        else:
+            params["title"] = "[Bug Report]: Describe issue or error here"
+        if body:
+            params["body"] = body
+        else:
+            diag = self._get_diagnostic_info()
+            params["body"] = (
+                "### Description of Issue\n"
+                "[Please describe what happened, what you expected, and any error message displayed]\n\n"
+                "### Steps to Reproduce\n"
+                "1. Launch ProDiscover\n"
+                "2. Action taken (e.g., Open Image, Live RAM Capture, File Carve)\n"
+                "3. Observe issue or error\n\n"
+                f"### System & Environment Diagnostics\n```\n{diag}\n```\n"
+            )
+        try:
+            full_url = f"{repo_url}?{urllib.parse.urlencode(params)}"
+            webbrowser.open(full_url)
+        except Exception:
+            webbrowser.open(repo_url)
+
+    def action_submit_feedback(self):
+        repo_url = "https://github.com/cid-moosa/prodiscover/issues/new"
+        diag = self._get_diagnostic_info()
+        body = (
+            "### Feature Request or Testing Feedback\n"
+            "[Please share your testing feedback, suggested forensic feature, or workflow idea]\n\n"
+            f"### System Environment\n```\n{diag}\n```\n"
         )
+        try:
+            full_url = f"{repo_url}?{urllib.parse.urlencode({'title': '[Feedback]: Feature suggestion or feedback', 'body': body})}"
+            webbrowser.open(full_url)
+        except Exception:
+            webbrowser.open(repo_url)
+
+    def action_open_github(self):
+        webbrowser.open("https://github.com/cid-moosa/prodiscover")
+
+    def action_check_updates(self):
+        webbrowser.open("https://github.com/cid-moosa/prodiscover/releases")
+
+    def show_error_with_report(self, title: str, message: str, error_details: str = None):
+        """Displays an error dialog with one-click GitHub bug reporting and clipboard copy."""
+        dlg = tk.Toplevel(self.root)
+        dlg.title(title)
+        dlg.geometry("580x440")
+        dlg.minsize(520, 380)
+        dlg.transient(self.root)
+        self._center_window(dlg, 580, 440)
+        dlg.configure(bg="#ECE9D8")
+        if hasattr(self, "app_icon_photo") and self.app_icon_photo:
+            try:
+                dlg.iconphoto(True, self.app_icon_photo)
+            except Exception:
+                pass
+        dlg.grab_set()
+
+        # Top Error Banner
+        top_frame = tk.Frame(dlg, bg="#B00020", height=48)
+        top_frame.pack(side=tk.TOP, fill=tk.X)
+        top_frame.pack_propagate(False)
+
+        lbl_top = tk.Label(
+            top_frame,
+            text=f"  Forensic Operation Notice  -  {title}",
+            font=("Segoe UI", 11, "bold"),
+            fg="#FFFFFF",
+            bg="#B00020",
+            anchor="w"
+        )
+        lbl_top.pack(side=tk.LEFT, fill=tk.BOTH, padx=12)
+
+        # Bottom Button Box (Packed first to prevent clipping)
+        btn_box = tk.Frame(dlg, bg="#ECE9D8", height=48)
+        btn_box.pack(side=tk.BOTTOM, fill=tk.X, padx=12, pady=10)
+
+        sep = ttk.Separator(dlg, orient="horizontal")
+        sep.pack(side=tk.BOTTOM, fill=tk.X, padx=10)
+
+        # Middle Content Frame
+        f_body = tk.Frame(dlg, bg="#ECE9D8")
+        f_body.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=14, pady=(10, 6))
+
+        lbl_msg = tk.Label(
+            f_body,
+            text=message,
+            font=("Segoe UI", 9, "bold"),
+            fg="#222222",
+            bg="#ECE9D8",
+            wraplength=540,
+            justify=tk.LEFT,
+            anchor="w"
+        )
+        lbl_msg.pack(side=tk.TOP, fill=tk.X, pady=(0, 4))
+
+        lbl_prompt = tk.Label(
+            f_body,
+            text="Help Us Debug: Please report this error to our GitHub Issue Tracker so we can investigate and fix it!",
+            font=("Segoe UI", 9),
+            fg="#004488",
+            bg="#ECE9D8",
+            wraplength=540,
+            justify=tk.LEFT,
+            anchor="w"
+        )
+        lbl_prompt.pack(side=tk.TOP, fill=tk.X, pady=(0, 6))
+
+        if error_details:
+            lbl_det_title = tk.Label(f_body, text="Technical Details / Traceback:", font=("Segoe UI", 8), bg="#ECE9D8", fg="#555555", anchor="w")
+            lbl_det_title.pack(side=tk.TOP, fill=tk.X)
+
+            txt_frame = tk.Frame(f_body, bd=1, relief=tk.SUNKEN)
+            txt_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(2, 6))
+            txt = tk.Text(txt_frame, wrap=tk.WORD, font=("Consolas", 8), bg="#FFFFFF", fg="#222222", bd=0)
+            sb = tk.Scrollbar(txt_frame, command=txt.yview)
+            txt.config(yscrollcommand=sb.set)
+            sb.pack(side=tk.RIGHT, fill=tk.Y)
+            txt.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            txt.insert(tk.END, error_details)
+            txt.config(state=tk.DISABLED)
+
+        # Buttons
+        def do_report():
+            issue_title = f"[Bug]: {title} - {message[:50]}"
+            issue_body = (
+                f"### Error Encountered\n**{title}**: {message}\n\n"
+                f"### Technical Traceback / Error Output\n```\n{error_details or 'No traceback available'}\n```\n\n"
+                f"### System & Environment Diagnostics\n```\n{self._get_diagnostic_info()}\n```\n"
+            )
+            self.action_report_issue(title=issue_title, body=issue_body)
+
+        def do_copy():
+            full_text = f"Title: {title}\nMessage: {message}\nDetails:\n{error_details or 'None'}\n\nEnvironment:\n{self._get_diagnostic_info()}"
+            self.root.clipboard_clear()
+            self.root.clipboard_append(full_text)
+            messagebox.showinfo("Copied", "Error details and diagnostic information copied to clipboard!", parent=dlg)
+
+        btn_report = tk.Button(
+            btn_box,
+            text="🐞 Report Bug on GitHub...",
+            font=("Segoe UI", 9, "bold"),
+            bg="#002D62",
+            fg="#FFFFFF",
+            relief=tk.RAISED,
+            bd=2,
+            padx=10,
+            command=do_report,
+            cursor="hand2"
+        )
+        btn_report.pack(side=tk.LEFT, padx=(0, 6))
+
+        btn_copy = tk.Button(
+            btn_box,
+            text="📋 Copy Error Details",
+            font=("Segoe UI", 9),
+            bg="#ECE9D8",
+            relief=tk.RAISED,
+            bd=2,
+            padx=8,
+            command=do_copy
+        )
+        btn_copy.pack(side=tk.LEFT, padx=6)
+
+        btn_close = tk.Button(
+            btn_box,
+            text="Close",
+            font=("Segoe UI", 9),
+            bg="#ECE9D8",
+            relief=tk.RAISED,
+            bd=2,
+            width=8,
+            command=dlg.destroy
+        )
+        btn_close.pack(side=tk.RIGHT)
+
+    def dlg_about(self):
+        dlg = tk.Toplevel(self.root)
+        dlg.title("About ProDiscover Basic & IR Forensic Edition")
+        dlg.geometry("680x620")
+        dlg.minsize(620, 560)
+        dlg.transient(self.root)
+        self._center_window(dlg, 680, 620)
+        dlg.configure(bg="#ECE9D8")
+        if hasattr(self, "app_icon_photo") and self.app_icon_photo:
+            try:
+                dlg.iconphoto(True, self.app_icon_photo)
+            except Exception:
+                pass
+        dlg.grab_set()
+
+        # Top Header Banner with Authentic Logo and Navy background
+        hdr = tk.Frame(dlg, bg="#002D62", height=95)
+        hdr.pack(side=tk.TOP, fill=tk.X)
+        hdr.pack_propagate(False)
+
+        # Load Logo Image
+        logo_img = None
+        logo_p = get_asset("logo.png") or get_asset("icon_25.png")
+        if logo_p and os.path.exists(logo_p):
+            try:
+                im = Image.open(logo_p).convert("RGBA")
+                im = im.resize((72, 72), Image.Resampling.LANCZOS)
+                logo_img = ImageTk.PhotoImage(im)
+                dlg.logo_img = logo_img
+            except Exception:
+                pass
+
+        if logo_img:
+            lbl_img = tk.Label(hdr, image=logo_img, bg="#002D62", bd=0)
+            lbl_img.pack(side=tk.LEFT, padx=(14, 10), pady=10)
+
+        lbl_text_box = tk.Frame(hdr, bg="#002D62")
+        lbl_text_box.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, pady=10)
+
+        lbl_app_name = tk.Label(
+            lbl_text_box,
+            text="ProDiscover Basic & Incident Response (IR)",
+            font=("Segoe UI", 14, "bold"),
+            fg="#FFFFFF",
+            bg="#002D62",
+            anchor="w"
+        )
+        lbl_app_name.pack(side=tk.TOP, anchor="w")
+
+        lbl_ver = tk.Label(
+            lbl_text_box,
+            text="Modern 64-bit Forensic Reconstruction  |  Version 1.0.0 (Build 2026.10)",
+            font=("Segoe UI", 9, "bold"),
+            fg="#B8D5F5",
+            bg="#002D62",
+            anchor="w"
+        )
+        lbl_ver.pack(side=tk.TOP, anchor="w", pady=(1, 0))
+
+        lbl_tag = tk.Label(
+            lbl_text_box,
+            text="Pixel-Faithful, Bit-for-Bit Computer Forensics & DFIR Incident Response",
+            font=("Segoe UI", 8, "italic"),
+            fg="#D0E2F5",
+            bg="#002D62",
+            anchor="w"
+        )
+        lbl_tag.pack(side=tk.TOP, anchor="w", pady=(2, 0))
+
+        # Bottom Action Bar (packed before body to guarantee no clipping)
+        btn_box = tk.Frame(dlg, bg="#ECE9D8", height=45)
+        btn_box.pack(side=tk.BOTTOM, fill=tk.X, padx=12, pady=10)
+
+        sep = ttk.Separator(dlg, orient="horizontal")
+        sep.pack(side=tk.BOTTOM, fill=tk.X, padx=10)
+
+        # Center Notebook for Tabs
+        nb = ttk.Notebook(dlg)
+        nb.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=12, pady=10)
+
+        # Tab 1: Forensic Overview & Architecture
+        tab_overview = tk.Frame(nb, bg="#ECE9D8", padx=10, pady=10)
+        nb.add(tab_overview, text="  Forensic Overview & Capabilities  ")
+
+        txt_overview_frame = tk.Frame(tab_overview, bd=1, relief=tk.SUNKEN)
+        txt_overview_frame.pack(fill=tk.BOTH, expand=True)
+
+        txt_ov = tk.Text(
+            txt_overview_frame,
+            wrap=tk.WORD,
+            font=("Segoe UI", 9),
+            bg="#FFFFFF",
+            fg="#222222",
+            bd=0,
+            padx=10,
+            pady=8
+        )
+        sb_ov = tk.Scrollbar(txt_overview_frame, command=txt_ov.yview)
+        txt_ov.config(yscrollcommand=sb_ov.set)
+        sb_ov.pack(side=tk.RIGHT, fill=tk.Y)
+        txt_ov.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        overview_content = (
+            "ABOUT PRODISCOVER FORENSIC SUITE\n"
+            "================================\n"
+            "ProDiscover Basic & Incident Response (IR) is an authentic, bit-for-bit modern 64-bit reconstruction "
+            "of the renowned ProDiscover computer forensics platform. Engineered for Windows 10/11 (x64) and Linux, "
+            "it delivers high-speed digital forensic examination while completely eliminating legacy 32-bit rootkit "
+            "drivers (mem.sys) and third-party decompression vulnerabilities.\n\n"
+            "CORE FORENSIC CAPABILITIES:\n\n"
+            "• Bit-Stream Disk Imaging:\n"
+            "  Sector-accurate disk acquisition to RAW bit-stream (.dd) and ProDiscover (.eve) formats with concurrent "
+            "MD5 and SHA-1 cryptographic validation, segment splitting, and court-admissible audit logs (.log).\n\n"
+            "• Live Physical Memory (RAM) Acquisition:\n"
+            "  Native user-mode live memory acquisition and process working set mapping without legacy 32-bit kernel "
+            "drivers, safe for modern enterprise environments with full Bit-Stream and forensic triage profiles.\n\n"
+            "• Multi-Filesystem Forensic Engine:\n"
+            "  Deep recursive parsing of FAT12, FAT16, FAT32, NTFS (with Alternate Data Streams $DATA and fixup array "
+            "validation), and Linux Ext2/Ext3/Ext4 extent trees.\n\n"
+            "• Slack Space & Deleted Recovery:\n"
+            "  Forensic recovery of deleted directory records, unallocated cluster chains, file slack space, and RAM slack.\n\n"
+            "• Signature Carving & Mismatch Auditing:\n"
+            "  Mask-aware automated file carving conforming to CarvConfig.txt and file header signature mismatch auditing "
+            "against Headersig.txt.\n\n"
+            "• Exhaustive Multi-Stream Search:\n"
+            "  Sliding-window forensic search across Allocated Space, Deleted/Unallocated clusters, File Slack, and "
+            "Cross-Cluster boundaries with in-place ASCII lowercasing to preserve exact byte offsets.\n\n"
+            "• Interactive Data Inspector & Interpreter:\n"
+            "  Live binary decoding of 8/16/32/64-bit integers (Little/Big Endian), DOS DateTime, Windows FILETIME, and "
+            "Unix epoch timestamps with sector jump and hex/text/slack inspection.\n\n"
+            "• 100% Native Desktop Software:\n"
+            "  Pure native OS windowing. Zero localhost bindings, zero local web servers, zero browser wrappers."
+        )
+        txt_ov.insert(tk.END, overview_content)
+        txt_ov.config(state=tk.DISABLED)
+
+        # Tab 2: Help Us Test & Bug Report
+        tab_testing = tk.Frame(nb, bg="#ECE9D8", padx=10, pady=10)
+        nb.add(tab_testing, text="  Help Us Test & Bug Report (GitHub)  ")
+
+        # Top alert banner in Tab 2
+        f_alert = tk.Frame(tab_testing, bg="#EBF3FB", bd=1, relief=tk.SOLID, padx=12, pady=10)
+        f_alert.pack(side=tk.TOP, fill=tk.X, pady=(0, 10))
+
+        lbl_alert_title = tk.Label(
+            f_alert,
+            text="COMMUNITY TESTING NOTICE - HELP US IMPROVE PRODISCOVER",
+            font=("Segoe UI", 10, "bold"),
+            fg="#003366",
+            bg="#EBF3FB",
+            anchor="w"
+        )
+        lbl_alert_title.pack(side=tk.TOP, anchor="w", pady=(0, 4))
+
+        alert_body = (
+            "Thank you for downloading and evaluating the ProDiscover Modern Forensic Reconstruction!\n\n"
+            "ProDiscover has undergone extensive verification against forensic reference images. However, "
+            "real-world forensic evidence, damaged media, non-standard partition layouts, and edge-case memory dumps "
+            "can present unique challenges.\n\n"
+            "If you encounter ANY error, crash, corrupt cluster reading, or evidence import freeze, please let us know! "
+            "Reporting issues allows our team to debug the root cause and release fixes promptly."
+        )
+        lbl_alert_body = tk.Label(
+            f_alert,
+            text=alert_body,
+            font=("Segoe UI", 9),
+            fg="#222222",
+            bg="#EBF3FB",
+            wraplength=590,
+            justify=tk.LEFT,
+            anchor="w"
+        )
+        lbl_alert_body.pack(side=tk.TOP, anchor="w")
+
+        # Diagnostics Panel in Tab 2
+        f_diag_box = tk.LabelFrame(
+            tab_testing,
+            text="Host Environment & System Diagnostics (Auto-Detected)",
+            font=("Segoe UI", 9, "bold"),
+            bg="#ECE9D8",
+            padx=10,
+            pady=6
+        )
+        f_diag_box.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+        txt_diag_frame = tk.Frame(f_diag_box, bd=1, relief=tk.SUNKEN)
+        txt_diag_frame.pack(fill=tk.BOTH, expand=True, pady=4)
+
+        txt_diag = tk.Text(
+            txt_diag_frame,
+            wrap=tk.WORD,
+            font=("Consolas", 9),
+            bg="#FFFFFF",
+            fg="#222222",
+            bd=0,
+            padx=8,
+            pady=6,
+            height=6
+        )
+        sb_diag = tk.Scrollbar(txt_diag_frame, command=txt_diag.yview)
+        txt_diag.config(yscrollcommand=sb_diag.set)
+        sb_diag.pack(side=tk.RIGHT, fill=tk.Y)
+        txt_diag.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        diag_content = self._get_diagnostic_info()
+        txt_diag.insert(tk.END, diag_content)
+        txt_diag.config(state=tk.DISABLED)
+
+        # Helper Actions for Buttons
+        def copy_diag():
+            self.root.clipboard_clear()
+            self.root.clipboard_append(self._get_diagnostic_info())
+            messagebox.showinfo("Copied", "Diagnostic information copied to clipboard!\nYou can paste it directly into your GitHub issue report.", parent=dlg)
+
+        # Bottom Buttons
+        btn_report = tk.Button(
+            btn_box,
+            text="🐞 Report Bug on GitHub...",
+            font=("Segoe UI", 9, "bold"),
+            bg="#002D62",
+            fg="#FFFFFF",
+            relief=tk.RAISED,
+            bd=2,
+            padx=12,
+            pady=2,
+            command=self.action_report_issue,
+            cursor="hand2"
+        )
+        btn_report.pack(side=tk.LEFT, padx=(0, 6))
+
+        btn_copy = tk.Button(
+            btn_box,
+            text="📋 Copy Diagnostic Info",
+            font=("Segoe UI", 9),
+            bg="#ECE9D8",
+            relief=tk.RAISED,
+            bd=2,
+            padx=8,
+            pady=2,
+            command=copy_diag
+        )
+        btn_copy.pack(side=tk.LEFT, padx=6)
+
+        btn_repo = tk.Button(
+            btn_box,
+            text="🌐 Project on GitHub",
+            font=("Segoe UI", 9),
+            bg="#ECE9D8",
+            relief=tk.RAISED,
+            bd=2,
+            padx=8,
+            pady=2,
+            command=self.action_open_github
+        )
+        btn_repo.pack(side=tk.LEFT, padx=6)
+
+        btn_close = tk.Button(
+            btn_box,
+            text="Close",
+            font=("Segoe UI", 9),
+            bg="#ECE9D8",
+            relief=tk.RAISED,
+            bd=2,
+            width=8,
+            pady=2,
+            command=dlg.destroy
+        )
+        btn_close.pack(side=tk.RIGHT)
+
+        dlg.bind("<Escape>", lambda e: dlg.destroy())
 
     def ir_show_processes(self):
         dlg = tk.Toplevel(self.root)

@@ -37,8 +37,14 @@
 
 A pixel-faithful, bit-exact native 64-bit desktop forensic suite reconstructing the classic **ProDiscover Basic & Incident Response (IR)** platform. Designed for modern Windows 10/11 (64-bit) and Linux systems, maintaining strict adherence to the original MFC interface and forensic workflows while delivering modern reliability, high-speed acquisition, and zero data loss.
 
-> [!WARNING]
-> **Active Development & Testing Notice**: This software and setup installer are currently under active development and **have not been fully tested across all environments**. Please wait for forthcoming updates and stable test releases before deploying in critical environments.
+> [!IMPORTANT]
+> ### 🧪 Help Us Test ProDiscover — Report Bugs & Issues
+> ProDiscover is currently undergoing active community testing and evaluation!
+> If you download and test this software with your disk images, forensic evidence, or memory dumps, **please let us know if you encounter any bugs, crashes, corrupt cluster readings, or unexpected behavior**.
+> 
+> 👉 **[Report an Issue or Bug on GitHub](https://github.com/cid-moosa/prodiscover/issues/new)**
+> 
+> You can also click **Help -> Report an Issue or Bug (GitHub)...** or **Help -> About ProDiscover Basic & IR...** directly inside the software to copy your diagnostic environment details and submit a report with 1 click. Your feedback helps us debug and ensure bit-level forensic perfection!
 
 ---
 
