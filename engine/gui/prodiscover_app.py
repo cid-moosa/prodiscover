@@ -982,7 +982,7 @@ class FilesystemDetector:
         dir_counter = [0]
         visited_clus = set()
 
-        def parse_directory(dir_id, name, path, cluster, first_sec, raw_bytes, parent_id=None):
+        def parse_directory(dir_id, name, path, cluster, first_sec, raw_bytes, parent_id=None, is_dir_deleted=False):
             dir_node = {
                 "id": dir_id,
                 "name": name,
@@ -991,6 +991,7 @@ class FilesystemDetector:
                 "first_sector": first_sec,
                 "parent_id": parent_id,
                 "is_dir": True,
+                "is_deleted": is_dir_deleted,
                 "subdirs": [],
                 "files": []
             }
@@ -1003,7 +1004,7 @@ class FilesystemDetector:
                 if len(entry) < 32 or entry[0] == 0x00:
                     break
                 first_byte = entry[0]
-                is_deleted = (first_byte == 0xE5)
+                is_deleted = (first_byte == 0xE5) or is_dir_deleted
                 attr = entry[11]
 
                 if attr == 0x0F:
@@ -1080,12 +1081,14 @@ class FilesystemDetector:
                     if full_name not in (".", ".."):
                         dir_node["files"].append(item_obj)
                         all_files_flat.append(item_obj)
-                        if start_clus >= 2 and start_clus not in visited_clus and not is_deleted:
+                        if start_clus >= 2 and start_clus not in visited_clus:
                             visited_clus.add(start_clus)
                             sub_chain = get_cluster_chain(start_clus)
+                            if not sub_chain:
+                                sub_chain = [start_clus]
                             sub_bytes = b"".join(read_cluster_bytes(c) for c in sub_chain)
                             sub_dir_node = parse_directory(
-                                child_dir_id, full_name, child_path, start_clus, first_s, sub_bytes, parent_id=dir_id
+                                child_dir_id, full_name, child_path, start_clus, first_s, sub_bytes, parent_id=dir_id, is_dir_deleted=is_deleted
                             )
                             dir_node["subdirs"].append(sub_dir_node)
                 else:
@@ -1292,11 +1295,12 @@ class ProDiscoverApp:
 
         # Load authentic table file/folder icons (18x18 RGBA)
         self.table_icons = {}
-        for name in ["folder", "folder_up", "file", "deleted", "txt", "bin", "img", "zip"]:
+        for name in ["folder", "folder_up", "folder_deleted", "file", "deleted", "txt", "bin", "img", "zip"]:
             p = get_asset(f"tbl_{name}.png")
             if not p or not os.path.exists(p):
                 if name == "folder": p = get_asset("tree_folder.png")
                 elif name == "deleted": p = get_asset("tree_deleted.png")
+                elif name == "folder_deleted": p = get_asset("tbl_folder_deleted.png") or get_asset("tree_folder.png")
                 elif name == "file": p = get_asset("tree_icons/icon_2.png")
             if p and os.path.exists(p):
                 try:
@@ -1305,16 +1309,21 @@ class ProDiscoverApp:
                     pass
         if "folder" not in self.table_icons and "folder" in self.tree_icons:
             self.table_icons["folder"] = self.tree_icons["folder"]
+        if "folder_deleted" not in self.table_icons:
+            self.table_icons["folder_deleted"] = self.table_icons.get("folder")
         if "deleted" not in self.table_icons and "deleted" in self.tree_icons:
             self.table_icons["deleted"] = self.tree_icons["deleted"]
         if "folder_up" not in self.table_icons and "folder" in self.table_icons:
             self.table_icons["folder_up"] = self.table_icons["folder"]
 
     def _get_file_icon(self, f):
+        is_d = f.get("is_dir") or "d" in f.get("attributes", "") or f.get("ext") == "[DIR]"
+        if is_d:
+            if f.get("is_deleted"):
+                return self.table_icons.get("folder_deleted", self.table_icons.get("folder"))
+            return self.table_icons.get("folder", self.tree_icons.get("folder"))
         if f.get("is_deleted"):
             return self.table_icons.get("deleted", self.tree_icons.get("deleted"))
-        if f.get("is_dir") or "d" in f.get("attributes", ""):
-            return self.table_icons.get("folder", self.tree_icons.get("folder"))
         ext = (f.get("ext", "") or "").lower().lstrip(".")
         if ext in ("jpg", "jpeg", "png", "bmp", "gif", "tga", "ico", "webp"):
             return self.table_icons.get("img", self.table_icons.get("file", self.tree_icons.get("folder")))
@@ -1417,6 +1426,7 @@ class ProDiscoverApp:
         action_menu.add_command(label="Copy Disk to Disk...", command=self.dlg_copy_disk)
         action_menu.add_command(label="Verify Image Integrity (MD5/SHA-1)...", command=self.action_verify_hashes)
         action_menu.add_command(label="Disk Inventory...", command=self.action_disk_inventory)
+        action_menu.add_command(label="Open Selected Folder", accelerator="Enter", command=lambda: self._on_table_double_click(None))
         action_menu.add_separator()
         action_menu.add_command(label="Carve Deleted Files (CarvConfig.txt)...", command=self.dlg_carve_files)
         action_menu.add_command(label="Recover Selected File...", accelerator="Ctrl+R", command=self.action_recover_file)
@@ -1641,6 +1651,7 @@ class ProDiscoverApp:
         self.table.bind("<<TreeviewSelect>>", self._on_table_select)
         self.table.bind("<Button-1>", self._on_table_click)
         self.table.bind("<Double-1>", self._on_table_double_click)
+        self.table.bind("<Return>", lambda e: self._on_table_double_click(None))
 
         # Right-click context menu (Menu 289 from ProDiscover Basic)
         self.file_context_menu = tk.Menu(self.root, tearoff=0)
@@ -2115,10 +2126,11 @@ class ProDiscoverApp:
 
                                 def add_subdirs(parent_tree_item, d_node):
                                     for sub in d_node.get("subdirs", []):
+                                        sub_icon = self.table_icons.get("folder_deleted", folder_icon) if sub.get("is_deleted") else folder_icon
                                         sub_tree_item = self.tree.insert(
                                             parent_tree_item, "end",
                                             text=sub["name"],
-                                            image=folder_icon,
+                                            image=sub_icon,
                                             open=False,
                                             tags=("dir_item", sub["id"], str(p_idx), norm_path)
                                         )
@@ -2302,7 +2314,7 @@ class ProDiscoverApp:
                 attr_str = "---d-------" if not is_del else "---DELETED-"
             else:
                 file_cnt += 1
-                size_str = f"{f['size']:,} bytes"
+                size_str = f"{f.get('size', 0):,} bytes"
                 ext_str = f.get("ext", "-") or "-"
                 attr_str = f.get("attributes", "---a-s-h-r-")
 
@@ -2328,6 +2340,106 @@ class ProDiscoverApp:
             self.table.selection_set(children[0])
             self._on_table_select(None)
 
+    def _parse_dir_on_the_fly(self, target_entry):
+        sec = int(target_entry.get("first_sector", 0))
+        if sec <= 0:
+            return None
+        name = target_entry.get("name", "Folder")
+        path = target_entry.get("path", f"/{name}")
+        cluster_sz = getattr(self, "cluster_size", 4096) or 4096
+        read_len = max(cluster_sz * 2, 32768)
+        raw_bytes = self.read_media_bytes(sec * 512, read_len)
+        if not raw_bytes:
+            return None
+
+        files = []
+        lfn_parts = {}
+        for i in range(0, len(raw_bytes), 32):
+            entry = raw_bytes[i:i+32]
+            if len(entry) < 32 or entry[0] == 0x00:
+                break
+            first_byte = entry[0]
+            is_del = (first_byte == 0xE5) or target_entry.get("is_deleted", False)
+            attr = entry[11]
+            if attr == 0x0F:
+                seq = entry[0] & 0x1F
+                name_chars = (
+                    entry[1:11].decode("utf-16le", errors="ignore") +
+                    entry[14:26].decode("utf-16le", errors="ignore") +
+                    entry[28:32].decode("utf-16le", errors="ignore")
+                )
+                lfn_parts[seq] = name_chars.split("\x00")[0]
+                continue
+            if attr & 0x08 and not (attr & 0x10):
+                lfn_parts.clear()
+                continue
+            if lfn_parts:
+                fn = "".join(lfn_parts[k] for k in sorted(lfn_parts.keys()))
+                lfn_parts.clear()
+            else:
+                raw_name = bytearray(entry[0:8])
+                if is_del: raw_name[0] = ord('?')
+                n_str = raw_name.decode("latin1", errors="ignore").strip()
+                e_str = entry[8:11].decode("latin1", errors="ignore").strip()
+                fn = f"{n_str}.{e_str}" if e_str else n_str
+            if not fn or fn in (".", ".."):
+                continue
+
+            low_c = struct.unpack_from("<H", entry, 26)[0]
+            high_c = struct.unpack_from("<H", entry, 20)[0]
+            f_clus = (high_c << 16) | low_c
+            f_sz = struct.unpack_from("<I", entry, 28)[0]
+            is_sub_dir = bool(attr & 0x10)
+
+            spc = max(1, cluster_sz // 512)
+            f_sec = sec + (i // 512)
+            if f_clus >= 2 and hasattr(self, "partitions") and self.partitions:
+                p = self.partitions[0]
+                if p.get("cluster_size"):
+                    f_sec = sec + max(0, f_clus - target_entry.get("cluster", f_clus)) * spc
+
+            c_date = struct.unpack_from("<H", entry, 16)[0]
+            c_time = struct.unpack_from("<H", entry, 14)[0]
+            m_date = struct.unpack_from("<H", entry, 24)[0]
+            m_time = struct.unpack_from("<H", entry, 22)[0]
+
+            def fmt_dos(d, t):
+                try:
+                    return f"{((d >> 5) & 0x0F):02d}/{(d & 0x1F):02d}/{(((d >> 9) & 0x7F) + 1980)} {((t >> 11) & 0x1F):02d}:{((t >> 5) & 0x3F):02d}"
+                except Exception:
+                    return "01/01/2011 00:00"
+
+            sub_item = {
+                "name": fn,
+                "ext": "[DIR]" if is_sub_dir else (os.path.splitext(fn)[1].lstrip(".").upper() or "-"),
+                "size": f_sz,
+                "attributes": "---d-------" if (is_sub_dir and not is_del) else ("---DELETED-" if is_del else "---a-s-h-r-"),
+                "is_dir": is_sub_dir,
+                "is_deleted": is_del,
+                "created": fmt_dos(c_date, c_time),
+                "modified": fmt_dos(m_date, m_time),
+                "first_sector": f_sec,
+                "cluster": f_clus,
+                "path": f"{path}/{fn}",
+                "parent_id": target_entry.get("parent_id")
+            }
+            files.append(sub_item)
+
+        dir_id = f"dyn_dir_{sec}"
+        node = {
+            "id": dir_id,
+            "name": name,
+            "path": path,
+            "first_sector": sec,
+            "parent_id": target_entry.get("parent_id"),
+            "is_dir": True,
+            "is_deleted": target_entry.get("is_deleted", False),
+            "files": files,
+            "subdirs": []
+        }
+        self.all_dirs_map[dir_id] = node
+        return node
+
     def _on_table_double_click(self, event):
         sel = self.table.selection()
         if not sel:
@@ -2340,50 +2452,77 @@ class ProDiscoverApp:
 
         # 1. Double click on '..' goes up to parent
         if name == ".. [Parent Directory]":
+            parent_node = None
             if self.current_dir_node and self.current_dir_node.get("parent_id"):
                 parent_id = self.current_dir_node["parent_id"]
                 parent_node = getattr(self, "all_dirs_map", {}).get(parent_id)
-                if parent_node:
-                    self.current_dir_node = parent_node
-                    self.current_files = parent_node.get("files", [])
-                    self.render_table(self.current_files, current_dir=parent_node)
-                    disp_path = parent_node.get("path", "/")
-                    disp_name = getattr(self, "current_media_name", None) or os.path.basename(self.current_media_path or "Root")
-                    self.lbl_table_title.config(text=f"File List - [{disp_name}: {disp_path}]")
-                    self.load_sector(parent_node.get("first_sector", 0))
-                    tree_item = getattr(self, "dir_to_tree_item", {}).get(parent_id)
-                    if tree_item and self.tree.exists(tree_item):
-                        self.tree.selection_set(tree_item)
-                        self.tree.see(tree_item)
+            if not parent_node and hasattr(self, "partitions") and self.partitions:
+                parent_node = self.partitions[0].get("root_dir")
+            if parent_node:
+                self.current_dir_node = parent_node
+                self.current_files = parent_node.get("files", [])
+                self.render_table(self.current_files, current_dir=parent_node)
+                disp_path = parent_node.get("path", "/")
+                disp_name = getattr(self, "current_media_name", None) or os.path.basename(self.current_media_path or "Root")
+                self.lbl_table_title.config(text=f"File List - [{disp_name}: {disp_path}]")
+                self.load_sector(parent_node.get("first_sector", 0))
+                tree_item = getattr(self, "dir_to_tree_item", {}).get(parent_node.get("id"))
+                if tree_item and self.tree.exists(tree_item):
+                    self.tree.selection_set(tree_item)
+                    self.tree.see(tree_item)
             return
 
         # 2. Double click on a folder navigates into it
         if ext == "[DIR]" or vals[3] == "<DIR>" or "d" in vals[4]:
             target_entry = None
+            req_sec = vals[8] if len(vals) > 8 else None
             for f in self.current_files:
                 if f["name"] == name and (f.get("is_dir") or "d" in f.get("attributes", "")):
-                    target_entry = f
-                    break
-            
+                    if req_sec is not None and req_sec not in ("-", ""):
+                        if str(f.get("first_sector", 0)) == str(req_sec):
+                            target_entry = f
+                            break
+                    else:
+                        target_entry = f
+                        break
+            if not target_entry:
+                for f in self.current_files:
+                    if f["name"] == name and (f.get("is_dir") or "d" in f.get("attributes", "")):
+                        target_entry = f
+                        break
+
+            child_node = None
             if target_entry and target_entry.get("dir_id"):
                 child_id = target_entry["dir_id"]
                 child_node = getattr(self, "all_dirs_map", {}).get(child_id)
-                if child_node:
-                    self.current_dir_node = child_node
-                    self.current_files = child_node.get("files", [])
-                    self.render_table(self.current_files, current_dir=child_node)
-                    disp_path = child_node.get("path", "/")
-                    disp_name = getattr(self, "current_media_name", None) or os.path.basename(self.current_media_path or "Root")
-                    self.lbl_table_title.config(text=f"File List - [{disp_name}: {disp_path}]")
-                    self.load_sector(child_node.get("first_sector", 0))
-                    tree_item = getattr(self, "dir_to_tree_item", {}).get(child_id)
-                    if tree_item and self.tree.exists(tree_item):
-                        self.tree.selection_set(tree_item)
-                        self.tree.see(tree_item)
-            return
 
-        # 3. If it is a deleted file, prompt examiner to recover it
-        if vals[5] == "YES" or name.startswith("?"):
+            if not child_node and target_entry:
+                sec = int(target_entry.get("first_sector", 0))
+                if sec > 0:
+                    child_node = self._parse_dir_on_the_fly(target_entry)
+
+            if child_node:
+                self.current_dir_node = child_node
+                self.current_files = child_node.get("files", [])
+                self.render_table(self.current_files, current_dir=child_node)
+                disp_path = child_node.get("path", "/" + name)
+                disp_name = getattr(self, "current_media_name", None) or os.path.basename(self.current_media_path or "Root")
+                self.lbl_table_title.config(text=f"File List - [{disp_name}: {disp_path}]")
+                self.load_sector(child_node.get("first_sector", 0))
+                tree_item = getattr(self, "dir_to_tree_item", {}).get(child_node.get("id"))
+                if tree_item and self.tree.exists(tree_item):
+                    self.tree.selection_set(tree_item)
+                    self.tree.see(tree_item)
+                return
+            else:
+                sec = int(target_entry.get("first_sector", 0)) if target_entry else 0
+                if sec > 0:
+                    self.load_sector(sec)
+                messagebox.showinfo("Directory Information", f"Directory '{name}' starting at Sector {sec} has no further accessible sub-entries.", parent=self.root)
+                return
+
+        # 3. If it is a deleted file (and not a folder!), prompt examiner to recover it
+        if (vals[5] == "YES" or name.startswith("?")) and ext != "[DIR]" and vals[3] != "<DIR>":
             ans = messagebox.askyesno(
                 "Recover Deleted File",
                 f"Selected file '{name}' is a deleted forensic artifact.\n\n"
@@ -4888,7 +5027,27 @@ class ProDiscoverApp:
         if item:
             self.table.selection_set(item)
             self._on_table_select(None)
-            self.file_context_menu.post(event.x_root, event.y_root)
+            vals = self.table.item(item, "values")
+            is_d = vals and (vals[2] == "[DIR]" or vals[3] == "<DIR>" or "d" in vals[4])
+
+            menu = tk.Menu(self.root, tearoff=0)
+            if is_d:
+                menu.add_command(label="Open Folder", font=("Tahoma", 8, "bold"), command=lambda: self._on_table_double_click(None))
+                menu.add_separator()
+            menu.add_command(label="Mark as Evidence of Interest", command=self.action_toggle_eoi)
+            if not is_d:
+                menu.add_command(label="View EXIF Data...", command=self.dlg_exif)
+            menu.add_separator()
+            if vals and (vals[5] == "YES" or vals[1].startswith("?")):
+                if is_d:
+                    menu.add_command(label="Open Deleted Folder", command=lambda: self._on_table_double_click(None))
+                else:
+                    menu.add_command(label="Recover Deleted File...", command=self.action_recover_file)
+            menu.add_command(label="Export File / Directory...", command=self.action_export_selected_file)
+            menu.add_command(label="Copy to Clipboard", command=self.action_copy_clipboard)
+            menu.add_command(label="View Slack Space", command=self.action_view_slack)
+            menu.add_command(label="Data InterPreter...", command=self.dlg_data_interpreter)
+            menu.post(event.x_root, event.y_root)
 
     def action_toggle_eoi(self):
         sel = self.table.selection()
