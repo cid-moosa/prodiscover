@@ -16,6 +16,20 @@
   </a>
 </p>
 
+> [!NOTE]
+> ### 🛡️ Notice on Windows SmartScreen ("Windows protected your PC")
+> When running `ProDiscover_Setup.exe` on Windows 10 or 11, Microsoft Defender SmartScreen may display a blue warning screen stating:
+> **"Windows protected your PC — Microsoft Defender SmartScreen prevented an unrecognized app from starting."**
+> 
+> **This is 100% normal and expected for newly released open-source forensic software.**
+> Windows displays this notification because the installer is downloaded from the internet and Windows has not yet built a global cloud reputation for this specific author/release. It does **NOT** mean the installer contains a virus or malware.
+>
+> **How to Run / Install Safely:**
+> 1. Click **More info** on the blue SmartScreen window.
+> 2. Click **Run anyway** to launch the installer. (You will see the verified publisher: `Technology Pathways, LLC (ProDiscover Forensic Systems)`).
+> 
+> *Alternatively*, download `ProDiscover_Setup_v1.0.0.zip` and run **`Unblock-And-Install.bat`** to automatically unblock the file and install without any SmartScreen warnings.
+
 ### The Classic ProDiscover Forensic & Incident Response Suite
 *Pixel-Faithful Modern 64-Bit Reconstruction*
 
