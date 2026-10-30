@@ -4474,10 +4474,11 @@ class ProDiscoverApp:
         """
         dlg = tk.Toplevel(self.root)
         dlg.title("Acquire Live Physical Memory (RAM Bit-Stream) - ProDiscover IR")
-        dlg.geometry("540x510")
-        dlg.resizable(False, False)
+        dlg.geometry("560x620")
+        dlg.minsize(540, 580)
+        dlg.resizable(True, True)
         dlg.transient(self.root)
-        self._center_window(dlg, 540, 510)
+        self._center_window(dlg, 560, 620)
         dlg.configure(bg="#ECE9D8")
         dlg.grab_set()
 
@@ -4510,8 +4511,15 @@ class ProDiscoverApp:
         )
         lbl_sub.pack(anchor="w", padx=12, pady=(0, 4))
 
-        f_body = tk.Frame(dlg, bg="#ECE9D8", padx=14, pady=8)
-        f_body.pack(fill=tk.BOTH, expand=True)
+        # Bottom Buttons & Separator (Packed FIRST with side=tk.BOTTOM to prevent vertical clipping)
+        btn_box = tk.Frame(dlg, bg="#ECE9D8", padx=14, pady=10)
+        btn_box.pack(side=tk.BOTTOM, fill=tk.X)
+
+        sep = ttk.Separator(dlg, orient="horizontal")
+        sep.pack(side=tk.BOTTOM, fill=tk.X, padx=14, pady=(0, 2))
+
+        f_body = tk.Frame(dlg, bg="#ECE9D8", padx=14, pady=6)
+        f_body.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
         mem_info = get_system_memory_status()
         tot_bytes = mem_info["total_bytes"]
@@ -4625,10 +4633,6 @@ class ProDiscoverApp:
 
         tk.Checkbutton(f_opts, text="Automatically Add Acquired Memory to Project for Analysis", variable=var_autoload, font=("Tahoma", 8, "bold"), fg="#002D62", bg="#ECE9D8").pack(anchor="w", pady=(4, 0))
 
-        # Bottom Buttons
-        btn_box = tk.Frame(dlg, bg="#ECE9D8", padx=14, pady=10)
-        btn_box.pack(side=tk.BOTTOM, fill=tk.X)
-
         def do_start():
             dst = e_dst.get().strip()
             if not dst:
@@ -4674,8 +4678,38 @@ class ProDiscoverApp:
             dlg.destroy()
             self._execute_ram_acquisition(dst, acq_bytes, var_autoload.get())
 
-        tk.Button(btn_box, text="Start Acquisition", font=("Tahoma", 8, "bold"), width=16, command=do_start).pack(side=tk.RIGHT, padx=4)
-        tk.Button(btn_box, text="Cancel", font=("Tahoma", 8), width=10, command=dlg.destroy).pack(side=tk.RIGHT, padx=4)
+        btn_start = tk.Button(
+            btn_box,
+            text="Start Acquisition",
+            font=("Tahoma", 9, "bold"),
+            bg="#002D62",
+            fg="#FFFFFF",
+            activebackground="#001F45",
+            activeforeground="#FFFFFF",
+            width=18,
+            height=1,
+            relief=tk.RAISED,
+            bd=2,
+            cursor="hand2",
+            command=do_start
+        )
+        btn_start.pack(side=tk.RIGHT, padx=4)
+
+        btn_cancel = tk.Button(
+            btn_box,
+            text="Cancel",
+            font=("Tahoma", 9),
+            width=10,
+            height=1,
+            relief=tk.RAISED,
+            bd=2,
+            cursor="hand2",
+            command=dlg.destroy
+        )
+        btn_cancel.pack(side=tk.RIGHT, padx=4)
+
+        dlg.bind("<Return>", lambda e: do_start())
+        dlg.bind("<Escape>", lambda e: dlg.destroy())
 
     def _execute_ram_acquisition(self, dst_path, total_bytes, autoload=True):
         """
