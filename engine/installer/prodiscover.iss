@@ -1,9 +1,9 @@
-[Setup]
+﻿[Setup]
 AppId={{C6287003-8B35-4A92-9844-075A1B82FD26}
 AppName=ProDiscover Basic & IR
 AppVersion=7.0.0.3
 AppVerName=ProDiscover Basic 7.0 (64-bit)
-AppPublisher=Technology Pathways / Modern Reconstruction
+AppPublisher=Technology Pathways, LLC
 AppPublisherURL=https://github.com/cid-moosa/prodiscover
 AppSupportURL=https://github.com/cid-moosa/prodiscover
 AppUpdatesURL=https://github.com/cid-moosa/prodiscover/releases
@@ -19,8 +19,7 @@ Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
 ArchitecturesInstallIn64BitMode=x64compatible
-PrivilegesRequired=lowest
-PrivilegesRequiredOverridesAllowed=dialog
+PrivilegesRequired=admin
 ChangesAssociations=yes
 UninstallDisplayName=ProDiscover Basic & IR (64-bit)
 UninstallDisplayIcon={app}\assets\prodiscover.ico
@@ -71,4 +70,31 @@ Type: dirifempty; Name: "{app}"
 [Run]
 Filename: "{app}\prodiscover.exe"; Description: "{cm:LaunchProgram,ProDiscover Basic}"; Flags: nowait postinstall skipifsilent
 
+[Code]
+procedure InitializeWizard;
+var
+  i: Integer;
+begin
+  // Ensure "Create a desktop icon" is checked by default
+  for i := 0 to WizardForm.TasksList.Items.Count - 1 do
+  begin
+    if Pos('desktop', Lowercase(WizardForm.TasksList.ItemCaption[i])) > 0 then
+      WizardForm.TasksList.Checked[i] := True;
+  end;
+end;
 
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  // Hide image on Finished page as requested by user
+  if CurPageID = wpFinished then
+  begin
+    if WizardForm.WizardBitmapImage2 <> nil then
+      WizardForm.WizardBitmapImage2.Visible := False;
+
+    // Reposition finished texts to fill full wizard width cleanly
+    WizardForm.FinishedHeadingLabel.Left := ScaleX(20);
+    WizardForm.FinishedHeadingLabel.Width := WizardForm.FinishedPage.Width - ScaleX(40);
+    WizardForm.FinishedLabel.Left := ScaleX(20);
+    WizardForm.FinishedLabel.Width := WizardForm.FinishedPage.Width - ScaleX(40);
+  end;
+end;

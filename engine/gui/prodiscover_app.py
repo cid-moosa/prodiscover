@@ -229,15 +229,7 @@ class Win32DeviceStream:
             if not clean_path.startswith("\\\\.\\"):
                 clean_path = "\\\\.\\" + clean_path
 
-            self.handle = ctypes.windll.kernel32.CreateFileW(
-                clean_path,
-                GENERIC_READ,
-                FILE_SHARE_READ | FILE_SHARE_WRITE,
-                None,
-                OPEN_EXISTING,
-                0,
-                None
-            )
+            self.handle = ctypes.windll.kernel32.CreateFileW(clean_path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | 0x00000004, None, OPEN_EXISTING, 0x80, None)
             INVALID_HANDLE = ctypes.c_void_p(-1).value
             if self.handle in (None, 0, -1, INVALID_HANDLE, 0xFFFFFFFF):
                 err = ctypes.GetLastError()
@@ -325,6 +317,325 @@ class Win32DeviceStream:
             self.file_obj = None
 
 
+class FilesystemDetector:
+    """
+    Forensic Filesystem and Partition Parser supporting NTFS, FAT12, FAT16,
+    FAT32 (with Long File Names and deleted file recovery), and MBR Partition Tables.
+    Pure native Python implementation with zero subprocess dependencies.
+    """
+    def __init__(self, read_fn, total_size):
+        self.read_bytes = read_fn
+        self.total_size = total_size
+        self.total_sectors = max(1, total_size // 512)
+        self.partitions = []
+
+    def parse(self):
+        vbr0 = self.read_bytes(0, 512)
+        if len(vbr0) < 512:
+            return {"type": "Unknown", "partitions": []}
+
+        # 1. Check direct NTFS VBR
+        if vbr0[3:7] == b"NTFS":
+            res = self._parse_ntfs(0)
+            if res:
+                return {
+                    "type": "NTFS",
+                    "partitions": [{
+                        "name": "Partition 0 [NTFS Root Directory]",
+                        "type": "NTFS",
+                        "start_sector": 0,
+                        "sectors": self.total_sectors,
+                        "cluster_size": res["cluster_size"],
+                        "files": res["files"]
+                    }]
+                }
+
+        # 2. Check direct FAT12/16/32 VBR
+        fat_res = self._parse_fat(0)
+        if fat_res:
+            return {
+                "type": fat_res["type"],
+                "partitions": [{
+                    "name": f"Partition 0 [{fat_res['type']} Root Directory]",
+                    "type": fat_res["type"],
+                    "start_sector": 0,
+                    "sectors": self.total_sectors,
+                    "cluster_size": fat_res["cluster_size"],
+                    "files": fat_res["files"]
+                }]
+            }
+
+        # 3. Check MBR Partition Table if sector ends in 0x55AA
+        if vbr0[0x1FE:0x200] == b"\x55\xAA":
+            mbr_parts = []
+            for i in range(4):
+                entry = vbr0[0x1BE + i*16 : 0x1BE + (i+1)*16]
+                boot_flag = entry[0]
+                p_type = entry[4]
+                start_lba = struct.unpack_from("<I", entry, 8)[0]
+                num_sec = struct.unpack_from("<I", entry, 12)[0]
+                
+                # Validate MBR partition entry constraints
+                if boot_flag in (0x00, 0x80) and p_type != 0 and start_lba > 0 and num_sec > 0:
+                    if start_lba + num_sec <= self.total_sectors + 65536:
+                        mbr_parts.append((i+1, p_type, start_lba, num_sec))
+
+            if mbr_parts:
+                detected_parts = []
+                for p_num, p_type, lba, secs in mbr_parts:
+                    p_offset = lba * 512
+                    part_vbr = self.read_bytes(p_offset, 512)
+                    p_files = []
+                    p_fs = f"Type 0x{p_type:02X}"
+                    c_sz = 512
+
+                    if part_vbr[3:7] == b"NTFS":
+                        n_res = self._parse_ntfs(p_offset)
+                        if n_res:
+                            p_fs = "NTFS"
+                            c_sz = n_res["cluster_size"]
+                            p_files = n_res["files"]
+                    else:
+                        f_res = self._parse_fat(p_offset)
+                        if f_res:
+                            p_fs = f_res["type"]
+                            c_sz = f_res["cluster_size"]
+                            p_files = f_res["files"]
+
+                    detected_parts.append({
+                        "name": f"Partition {p_num} [{p_fs}] (LBA {lba:,})",
+                        "type": p_fs,
+                        "start_sector": lba,
+                        "sectors": secs,
+                        "cluster_size": c_sz,
+                        "files": p_files
+                    })
+                return {
+                    "type": detected_parts[0]["type"] if len(detected_parts) == 1 else "Partitioned Disk",
+                    "partitions": detected_parts
+                }
+
+        # Raw Binary / Unknown fallback
+        return {
+            "type": "Raw Binary / Unknown",
+            "partitions": [{
+                "name": "Partition 0 [Raw Binary / Unknown]",
+                "type": "Raw Binary / Unknown",
+                "start_sector": 0,
+                "sectors": self.total_sectors,
+                "cluster_size": 512,
+                "files": []
+            }]
+        }
+
+    def _parse_ntfs(self, vbr_offset):
+        vbr = self.read_bytes(vbr_offset, 512)
+        if vbr[3:7] != b"NTFS":
+            return None
+        bps = struct.unpack_from("<H", vbr, 11)[0]
+        spc = vbr[13]
+        if bps == 0 or spc == 0:
+            return None
+        cluster_sz = bps * spc
+        mft_lcn = struct.unpack_from("<Q", vbr, 48)[0]
+        mft_rec_val = vbr[0x40]
+        if mft_rec_val > 0x80:
+            record_sz = 1 << (256 - mft_rec_val)
+        else:
+            record_sz = mft_rec_val * cluster_sz
+            
+        mft_offset = vbr_offset + (mft_lcn * cluster_sz)
+        files = []
+        for rec_idx in range(256):
+            rec_data = self.read_bytes(mft_offset + rec_idx * record_sz, record_sz)
+            if len(rec_data) < record_sz or rec_data[:4] != b"FILE":
+                continue
+            flags = struct.unpack_from("<H", rec_data, 22)[0]
+            in_use = bool(flags & 1)
+            is_dir = bool(flags & 2)
+            attr_off = struct.unpack_from("<H", rec_data, 20)[0]
+            file_name, file_size = "", 0
+            created, modified, ads_name = "12/07/1999 05:00", "11/16/2001 22:40", ""
+
+            while attr_off < len(rec_data) - 8:
+                attr_type = struct.unpack_from("<I", rec_data, attr_off)[0]
+                if attr_type == 0xFFFFFFFF or attr_type == 0:
+                    break
+                attr_len = struct.unpack_from("<I", rec_data, attr_off + 4)[0]
+                if attr_len == 0 or attr_off + attr_len > len(rec_data):
+                    break
+                non_res = rec_data[attr_off + 8]
+                name_len = rec_data[attr_off + 9]
+                name_off = struct.unpack_from("<H", rec_data, attr_off + 10)[0]
+
+                if attr_type == 0x80 and name_len > 0:
+                    ads_name = rec_data[attr_off + name_off : attr_off + name_off + name_len * 2].decode("utf-16le", errors="ignore")
+
+                if attr_type == 0x10 and non_res == 0:
+                    info_off = attr_off + struct.unpack_from("<H", rec_data, attr_off + 20)[0]
+                    if info_off + 32 <= len(rec_data):
+                        c_time = struct.unpack_from("<Q", rec_data, info_off)[0]
+                        m_time = struct.unpack_from("<Q", rec_data, info_off + 8)[0]
+                        import datetime
+                        try:
+                            created = (datetime.datetime(1601, 1, 1) + datetime.timedelta(microseconds=c_time // 10)).strftime("%m/%d/%Y %H:%M")
+                        except Exception: pass
+                        try:
+                            modified = (datetime.datetime(1601, 1, 1) + datetime.timedelta(microseconds=m_time // 10)).strftime("%m/%d/%Y %H:%M")
+                        except Exception: pass
+
+                elif attr_type == 0x30 and non_res == 0:
+                    info_off = attr_off + struct.unpack_from("<H", rec_data, attr_off + 20)[0]
+                    if info_off + 66 <= len(rec_data):
+                        fn_len = rec_data[info_off + 64]
+                        fn_ns = rec_data[info_off + 65]
+                        fn = rec_data[info_off + 66 : info_off + 66 + fn_len * 2].decode("utf-16le", errors="ignore")
+                        if not file_name or fn_ns != 2:
+                            file_name = fn
+                            if file_size == 0:
+                                file_size = struct.unpack_from("<Q", rec_data, info_off + 48)[0]
+
+                elif attr_type == 0x80:
+                    if non_res == 0:
+                        file_size = struct.unpack_from("<I", rec_data, attr_off + 16)[0]
+                    else:
+                        file_size = struct.unpack_from("<Q", rec_data, attr_off + 48)[0]
+
+                attr_off += attr_len
+
+            if file_name and file_name != ".":
+                attr_str = "---a-s-h-r-"
+                if is_dir: attr_str = "---d-------"
+                if ads_name: attr_str = "---ADS---"
+                if not in_use: attr_str = "---DELETED-"
+                files.append({
+                    "name": file_name,
+                    "ext": os.path.splitext(file_name)[1].lstrip(".").upper(),
+                    "size": file_size,
+                    "attributes": attr_str,
+                    "is_deleted": not in_use,
+                    "created": created,
+                    "modified": modified,
+                    "first_sector": (mft_offset // 512) + rec_idx * (record_sz // 512),
+                    "cluster": mft_lcn,
+                    "slack": (cluster_sz - (file_size % cluster_sz)) if (cluster_sz > 0 and file_size % cluster_sz != 0) else 0,
+                    "mft_record": rec_idx,
+                    "ads": ads_name
+                })
+        return {"cluster_size": cluster_sz, "files": files}
+
+    def _parse_fat(self, vbr_offset):
+        vbr = self.read_bytes(vbr_offset, 512)
+        if vbr[0x1FE:0x200] != b"\x55\xAA":
+            return None
+        bps = struct.unpack_from("<H", vbr, 11)[0]
+        spc = vbr[13]
+        rsvd = struct.unpack_from("<H", vbr, 14)[0]
+        num_fats = vbr[16]
+        rde = struct.unpack_from("<H", vbr, 17)[0]
+        tot16 = struct.unpack_from("<H", vbr, 19)[0]
+        fat16_sz = struct.unpack_from("<H", vbr, 22)[0]
+        tot32 = struct.unpack_from("<I", vbr, 32)[0]
+
+        if bps not in (512, 1024, 2048, 4096) or spc == 0 or num_fats == 0:
+            return None
+        tot_sec = tot16 if tot16 != 0 else tot32
+        is_fat32 = (rde == 0 and fat16_sz == 0)
+
+        if is_fat32:
+            fat_sz = struct.unpack_from("<I", vbr, 36)[0]
+            root_clus = struct.unpack_from("<I", vbr, 44)[0]
+            first_data_sec = rsvd + (num_fats * fat_sz)
+            fs_type = "FAT32"
+            cluster_size = spc * bps
+            root_off = vbr_offset + (first_data_sec + (root_clus - 2) * spc) * bps
+            dir_bytes = self.read_bytes(root_off, cluster_size * 4)
+        else:
+            fat_sz = fat16_sz
+            root_dir_sectors = ((rde * 32) + (bps - 1)) // bps
+            first_data_sec = rsvd + (num_fats * fat_sz) + root_dir_sectors
+            root_start_sec = rsvd + (num_fats * fat_sz)
+            data_sec = tot_sec - first_data_sec
+            total_clusters = data_sec // spc if spc > 0 else 0
+            fs_type = "FAT12" if total_clusters < 4085 else "FAT16"
+            cluster_size = spc * bps
+            dir_bytes = self.read_bytes(vbr_offset + root_start_sec * bps, rde * 32)
+
+        files = []
+        lfn_parts = {}
+        for i in range(0, len(dir_bytes), 32):
+            entry = dir_bytes[i:i+32]
+            if len(entry) < 32 or entry[0] == 0x00:
+                break
+            first_byte = entry[0]
+            is_deleted = (first_byte == 0xE5)
+            attr = entry[11]
+
+            if attr == 0x0F:
+                seq = entry[0] & 0x1F
+                name_chars = (
+                    entry[1:11].decode("utf-16le", errors="ignore") +
+                    entry[14:26].decode("utf-16le", errors="ignore") +
+                    entry[28:32].decode("utf-16le", errors="ignore")
+                )
+                lfn_parts[seq] = name_chars.split("\x00")[0]
+                continue
+
+            if attr & 0x08 and not (attr & 0x10):
+                lfn_parts.clear()
+                continue
+
+            if lfn_parts:
+                full_name = "".join(lfn_parts[k] for k in sorted(lfn_parts.keys()))
+                lfn_parts.clear()
+            else:
+                raw_name = bytearray(entry[0:8])
+                if is_deleted: raw_name[0] = ord('?')
+                name_str = raw_name.decode("latin1", errors="ignore").strip()
+                ext_str = entry[8:11].decode("latin1", errors="ignore").strip()
+                full_name = f"{name_str}.{ext_str}" if ext_str else name_str
+
+            high_clus = struct.unpack_from("<H", entry, 20)[0] if is_fat32 else 0
+            low_clus = struct.unpack_from("<H", entry, 26)[0]
+            start_clus = (high_clus << 16) | low_clus
+            file_size = struct.unpack_from("<I", entry, 28)[0]
+            first_sec = (vbr_offset // bps) + first_data_sec + (start_clus - 2) * spc if start_clus >= 2 else 0
+
+            c_date_raw = struct.unpack_from("<H", entry, 16)[0]
+            c_time_raw = struct.unpack_from("<H", entry, 14)[0]
+            m_date_raw = struct.unpack_from("<H", entry, 24)[0]
+            m_time_raw = struct.unpack_from("<H", entry, 22)[0]
+
+            def dos_dt(d, t):
+                try:
+                    return f"{((d >> 5) & 0x0F):02d}/{(d & 0x1F):02d}/{(((d >> 9) & 0x7F) + 1980)} {((t >> 11) & 0x1F):02d}:{((t >> 5) & 0x3F):02d}"
+                except Exception:
+                    return "11/12/2001 17:39"
+
+            slack = 0
+            if file_size > 0 and cluster_size > 0:
+                rem = file_size % cluster_size
+                if rem > 0: slack = cluster_size - rem
+
+            attr_str = "---a-s-h-r-"
+            if attr & 0x10: attr_str = "---d-------"
+            if is_deleted: attr_str = "---DELETED-"
+
+            files.append({
+                "name": full_name,
+                "ext": os.path.splitext(full_name)[1].lstrip(".").upper(),
+                "size": file_size,
+                "attributes": attr_str,
+                "is_deleted": is_deleted,
+                "created": dos_dt(c_date_raw, c_time_raw),
+                "modified": dos_dt(m_date_raw, m_time_raw),
+                "first_sector": first_sec,
+                "cluster": start_clus,
+                "slack": slack
+            })
+        return {"type": fs_type, "cluster_size": cluster_size, "files": files}
+
+
 class ProDiscoverApp:
     def __init__(self, root):
         self.root = root
@@ -356,10 +667,12 @@ class ProDiscoverApp:
         # Forensic Media State
         self.current_media_path = None
         self.current_media_size = 0
+        self.media_header_offset = 0
         self.current_sector_size = 512
         self.total_sectors = 0
         self.current_sector = 0
         self.current_files = []
+        self.partitions = []
         self.selected_file = None
         self.current_hex_mode = "hex"  # hex, text, slack
         self.audit_log = []
@@ -509,10 +822,10 @@ class ProDiscoverApp:
 
     def _find_engine_binary(self):
         candidates = [
-            resolve_file("builds/bin/prodiscover.exe"),
+            resolve_file("builds/bin/prodiscover-cli.exe"),
             resolve_file("builds/bin/prodiscover-linux"),
-            resolve_file("engine/prodiscover.exe"),
-            resolve_file("engine/cmd/prodiscover/prodiscover.exe"),
+            resolve_file("engine/prodiscover-cli.exe"),
+            resolve_file("engine/cmd/prodiscover/prodiscover-cli.exe"),
         ]
         for c in candidates:
             if os.path.isfile(c):
@@ -1092,22 +1405,14 @@ class ProDiscoverApp:
         else:
             try:
                 with open(self.current_media_path, "rb") as f:
-                    f.seek(offset)
+                    f.seek(getattr(self, "media_header_offset", 0) + offset)
                     return f.read(count)
             except Exception:
                 return b""
 
     def refresh_physical_drives(self):
-        for c in self.tree.get_children(self.node_disks):
-            self.tree.delete(c)
-        drives = self.get_system_drives(refresh=True)
-        disk_icon = self.tree_icons.get("disk")
-        for d in drives:
-            if d.get("type") == "Physical Drive":
-                if disk_icon:
-                    self.tree.insert(self.node_disks, "end", text=d["display"], image=disk_icon, tags=("drive", d["path"]))
-                else:
-                    self.tree.insert(self.node_disks, "end", text=d["display"], tags=("drive", d["path"]))
+        pass
+
 
     def load_media(self, path, disk_name=None):
         is_device = path.startswith("\\\\.\\") or path.startswith("/dev/")
@@ -1147,7 +1452,19 @@ class ProDiscoverApp:
             self.load_sector(0)
             return
 
-        if is_device:
+        if not is_device:
+            self.current_media_path = os.path.abspath(path)
+            self.media_header_offset = 0
+            try:
+                with open(self.current_media_path, "rb") as f_chk:
+                    if f_chk.read(4) == b"EVE ":
+                        self.media_header_offset = 512
+            except Exception:
+                pass
+            raw_sz = os.path.getsize(self.current_media_path)
+            self.current_media_size = max(0, raw_sz - self.media_header_offset)
+        else:
+            self.media_header_offset = 0
             self.current_media_path = path
             drives = self.get_system_drives()
             d_info = next((d for d in drives if d['path'].upper() == path.upper() or d['path'].replace(r"\\.\PHYSICALDRIVE", "PhysicalDrive").replace(r"\.\PHYSICALDRIVE", "PhysicalDrive").upper() == path.upper()), None)
@@ -1155,9 +1472,6 @@ class ProDiscoverApp:
                 self.current_media_size = d_info['size']
             else:
                 self.current_media_size = 256 * 1024 * 1024 * 1024
-        else:
-            self.current_media_path = os.path.abspath(path)
-            self.current_media_size = os.path.getsize(self.current_media_path)
 
         self.current_sector_size = 512
         self.total_sectors = self.current_media_size // self.current_sector_size
@@ -1193,6 +1507,8 @@ class ProDiscoverApp:
                     chunk_sz = 1024 * 1024
 
                     with open(self.current_media_path, "rb") as f:
+                        if self.media_header_offset > 0:
+                            f.seek(self.media_header_offset)
                         while chunk := f.read(chunk_sz):
                             h_md5.update(chunk)
                             h_sha1.update(chunk)
@@ -1213,11 +1529,11 @@ class ProDiscoverApp:
                     self.media_md5 = h_md5.hexdigest()
                     self.media_sha1 = h_sha1.hexdigest()
 
-                # Step 2: Parse Filesystem
+                # Step 2: Parse Filesystem with native pure-Python engine
                 loading_dlg.update_progress(
                     percent=None,
-                    status_text="Parsing filesystem tables and MFT records...",
-                    detail_text="Scanning volume boot record and allocating cluster chains..."
+                    status_text="Parsing filesystem structures and directory records...",
+                    detail_text="Scanning Master Boot Record, VBR, and allocation tables..."
                 )
                 self._parse_media_filesystem()
 
@@ -1242,10 +1558,22 @@ class ProDiscoverApp:
                     else:
                         item_node = self.tree.insert(target_parent, "end", text=f"{target_name} [{self.fs_type}]", open=True, tags=("loaded_media", norm_path))
 
-                    if folder_icon:
-                        self.tree.insert(item_node, "end", text="Partition 0 [Root Directory]", image=folder_icon, tags=("partition_root", norm_path))
+                    # Insert detected partitions
+                    if hasattr(self, "partitions") and self.partitions:
+                        for p_idx, part in enumerate(self.partitions):
+                            self.tree.insert(
+                                item_node, "end",
+                                text=part["name"],
+                                image=folder_icon,
+                                tags=("partition_item", str(p_idx), norm_path)
+                            )
                     else:
-                        self.tree.insert(item_node, "end", text="Partition 0 [Root Directory]", tags=("partition_root", norm_path))
+                        self.tree.insert(
+                            item_node, "end",
+                            text="Partition 0 [Root Directory]",
+                            image=folder_icon,
+                            tags=("partition_root", norm_path)
+                        )
 
                     self.loaded_evidence[norm_path] = {
                         "node_id": item_node,
@@ -1280,120 +1608,19 @@ class ProDiscoverApp:
 
     def _parse_media_filesystem(self):
         self.current_files = []
+        self.partitions = []
         self.fs_type = "Raw Binary / Unknown"
+        try:
+            det = FilesystemDetector(self.read_media_bytes, self.current_media_size)
+            res = det.parse()
+            self.fs_type = res.get("type", "Raw Binary / Unknown")
+            self.partitions = res.get("partitions", [])
+            if self.partitions:
+                self.current_files = self.partitions[0].get("files", [])
+                self.cluster_size = self.partitions[0].get("cluster_size", 512)
+        except Exception as e:
+            self.log_action(f"Filesystem detection error: {e}")
 
-        vbr = self.read_media_bytes(0, 512)
-
-        if len(vbr) < 512:
-            return
-
-        # Check FAT BPB
-        if vbr[0x1FE:0x200] == b"\x55\xAA":
-            bps = struct.unpack_from("<H", vbr, 11)[0]
-            spc = vbr[13]
-            rsvd = struct.unpack_from("<H", vbr, 14)[0]
-            num_fats = vbr[16]
-            rde = struct.unpack_from("<H", vbr, 17)[0]
-            tot16 = struct.unpack_from("<H", vbr, 19)[0]
-            fat16_sz = struct.unpack_from("<H", vbr, 22)[0]
-            tot32 = struct.unpack_from("<I", vbr, 32)[0]
-
-            if bps == 512 and spc > 0 and num_fats > 0:
-                tot_sec = tot16 if tot16 != 0 else tot32
-                fat_sz = fat16_sz
-                root_dir_sectors = ((rde * 32) + (bps - 1)) // bps
-                first_data_sec = rsvd + (num_fats * fat_sz) + root_dir_sectors
-                root_start_sec = rsvd + (num_fats * fat_sz)
-
-                self.fs_type = "FAT16" if rde > 0 else "FAT32"
-                self.cluster_size = spc * bps
-
-                # Read Root Directory Entries
-                dir_bytes = self.read_media_bytes(root_start_sec * 512, rde * 32 if rde > 0 else 512 * 32)
-
-                for i in range(0, len(dir_bytes), 32):
-                    entry = dir_bytes[i:i+32]
-                    first_byte = entry[0]
-                    if first_byte == 0x00:
-                        break
-                    is_deleted = (first_byte == 0xE5)
-                    attr = entry[11]
-                    if attr == 0x0F:  # LFN skip for short name
-                        continue
-
-                    raw_name = bytearray(entry[0:8])
-                    if is_deleted:
-                        raw_name[0] = ord('?')
-                    name_str = raw_name.decode("latin1", errors="ignore").strip()
-                    ext_str = entry[8:11].decode("latin1", errors="ignore").strip()
-                    full_name = f"{name_str}.{ext_str}" if ext_str else name_str
-
-                    start_clus = struct.unpack_from("<H", entry, 26)[0]
-                    file_size = struct.unpack_from("<I", entry, 28)[0]
-                    first_sec = first_data_sec + (start_clus - 2) * spc if start_clus >= 2 else 0
-
-                    slack = 0
-                    if file_size > 0 and self.cluster_size > 0:
-                        rem = file_size % self.cluster_size
-                        if rem > 0:
-                            slack = self.cluster_size - rem
-
-                    attr_str = "---a-s-h-r-"
-                    if attr & 0x10: attr_str = "---d-------"
-                    if is_deleted: attr_str = "---DELETED-"
-
-                    self.current_files.append({
-                        "name": full_name,
-                        "ext": ext_str.upper(),
-                        "size": file_size,
-                        "attributes": attr_str,
-                        "is_deleted": is_deleted,
-                        "created": "11/12/2001 17:39",
-                        "modified": "11/12/2001 17:39",
-                        "first_sector": first_sec,
-                        "cluster": start_clus,
-                        "slack": slack
-                    })
-                return
-
-        # Check NTFS VBR
-        if vbr[3:7] == b"NTFS":
-            self.fs_type = "NTFS"
-            spc = vbr[13]
-            self.cluster_size = spc * 512
-            mft_lcn = struct.unpack_from("<Q", vbr, 48)[0]
-            # Use Go engine or internal MFT parser for deep records
-            if self.engine_bin:
-                try:
-                    out = subprocess.check_output([self.engine_bin, "info", self.current_media_path], text=True, errors="ignore")
-                    for line in out.splitlines():
-                        if "MFT[" in line:
-                            # Parse: $MFT Size: 39936 bytes MFT[ 0] [Allocated]
-                            parts = line.split()
-                            if len(parts) >= 5:
-                                fname = parts[0]
-                                sz = int(parts[2]) if parts[2].isdigit() else 0
-                                is_del = "[DELETED]" in line
-                                ads = "ADS" in line
-                                attr_s = "---ADS---" if ads else ("---DELETED-" if is_del else "---a-s-h-r-")
-                                self.current_files.append({
-                                    "name": fname,
-                                    "ext": os.path.splitext(fname)[1].lstrip(".").upper(),
-                                    "size": sz,
-                                    "attributes": attr_s,
-                                    "is_deleted": is_del,
-                                    "created": "12/07/1999 05:00",
-                                    "modified": "11/16/2001 22:40",
-                                    "first_sector": 0,
-                                    "cluster": 0,
-                                    "slack": (self.cluster_size - (sz % self.cluster_size)) if sz % self.cluster_size != 0 else 0
-                                })
-                except Exception:
-                    pass
-
-    # --------------------------------------------------------------------------
-    # Table Rendering & Interaction
-    # --------------------------------------------------------------------------
     def _on_table_click(self, event):
         region = self.table.identify("region", event.x, event.y)
         if region == "cell":
@@ -1481,10 +1708,20 @@ class ProDiscoverApp:
                 else:
                     self.render_table(self.current_files)
                     self.load_sector(0)
-        elif tag_type == "partition_root":
-            self.render_table(self.current_files)
-            self.lbl_table_title.config(text=f"File List - [{os.path.basename(self.current_media_path or 'Root')}: Root Directory]")
-            self.load_sector(0)
+        elif tag_type in ("partition_root", "partition_item"):
+            p_idx = 0
+            if len(tags) > 1 and tags[1].isdigit():
+                p_idx = int(tags[1])
+            if hasattr(self, "partitions") and p_idx < len(self.partitions):
+                part = self.partitions[p_idx]
+                self.current_files = part.get("files", [])
+                self.render_table(self.current_files)
+                self.lbl_table_title.config(text=f"File List - [{part.get('name', 'Partition')}]")
+                self.load_sector(part.get("start_sector", 0))
+            else:
+                self.render_table(self.current_files)
+                self.lbl_table_title.config(text=f"File List - [{os.path.basename(self.current_media_path or 'Root')}: Root Directory]")
+                self.load_sector(0)
         elif tag_type == "report":
             self.action_generate_report()
         elif tag_type == "capture_image":
@@ -2163,6 +2400,17 @@ class ProDiscoverApp:
                 messagebox.showwarning("Add Disk", "Please select a disk from the list.", parent=dlg)
                 return
             d = drives_list[sel[0]]
+            src_p = d["path"]
+            norm_p = src_p.upper() if (src_p.startswith("\\\\.\\") or src_p.startswith("/dev/")) else os.path.abspath(src_p)
+            if norm_p in self.loaded_evidence:
+                dlg.destroy()
+                ev = self.loaded_evidence[norm_p]
+                nid = ev.get("node_id")
+                if nid and self.tree.exists(nid):
+                    self.tree.selection_set(nid)
+                    self.tree.see(nid)
+                messagebox.showinfo("Add Disk", f"Disk '{d['display']}' is already in this project.", parent=self.root)
+                return
             disk_name = e_name.get().strip() or f"SuspectDisk{sel[0]}"
             dlg.destroy()
             self.load_media(d["path"], disk_name=disk_name)
@@ -2514,13 +2762,6 @@ class ProDiscoverApp:
                         return
 
                     with open(dst_path, "wb") as f_out:
-                        if "eve" in cb_fmt.get().lower():
-                            hdr = bytearray(512)
-                            hdr[0:4] = b"EVE"
-                            struct.pack_into("<Q", hdr, 8, total_bytes)
-                            struct.pack_into("<I", hdr, 16, 512)
-                            f_out.write(hdr)
-
                         while bytes_copied < total_bytes and not cancel_flag[0]:
                             to_read = min(chunk_size, total_bytes - bytes_copied)
                             data = f_src.read(to_read) if f_src else (b"" * to_read)

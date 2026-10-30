@@ -14,3 +14,4 @@ __pycache__/
 *.raw
 *.eve
 engine/installer/payload.zip
+*.pfx
