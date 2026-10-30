@@ -1005,6 +1005,42 @@ class ProDiscoverApp:
             except Exception:
                 pass
 
+        # Load authentic table file/folder icons (18x18 RGBA)
+        self.table_icons = {}
+        for name in ["folder", "folder_up", "file", "deleted", "txt", "bin", "img", "zip"]:
+            p = get_asset(f"tbl_{name}.png")
+            if not p or not os.path.exists(p):
+                if name == "folder": p = get_asset("tree_folder.png")
+                elif name == "deleted": p = get_asset("tree_deleted.png")
+                elif name == "file": p = get_asset("tree_icons/icon_2.png")
+            if p and os.path.exists(p):
+                try:
+                    self.table_icons[name] = ImageTk.PhotoImage(Image.open(p))
+                except Exception:
+                    pass
+        if "folder" not in self.table_icons and "folder" in self.tree_icons:
+            self.table_icons["folder"] = self.tree_icons["folder"]
+        if "deleted" not in self.table_icons and "deleted" in self.tree_icons:
+            self.table_icons["deleted"] = self.tree_icons["deleted"]
+        if "folder_up" not in self.table_icons and "folder" in self.table_icons:
+            self.table_icons["folder_up"] = self.table_icons["folder"]
+
+    def _get_file_icon(self, f):
+        if f.get("is_deleted"):
+            return self.table_icons.get("deleted", self.tree_icons.get("deleted"))
+        if f.get("is_dir") or "d" in f.get("attributes", ""):
+            return self.table_icons.get("folder", self.tree_icons.get("folder"))
+        ext = (f.get("ext", "") or "").lower().lstrip(".")
+        if ext in ("jpg", "jpeg", "png", "bmp", "gif", "tga", "ico", "webp"):
+            return self.table_icons.get("img", self.table_icons.get("file", self.tree_icons.get("folder")))
+        elif ext in ("bin", "dat", "firm", "3ds", "3dsx", "cia", "exe", "dll", "sys"):
+            return self.table_icons.get("bin", self.table_icons.get("file", self.tree_icons.get("folder")))
+        elif ext in ("txt", "log", "ini", "cfg", "bat", "py", "xml", "json", "md", "csv"):
+            return self.table_icons.get("txt", self.table_icons.get("file", self.tree_icons.get("folder")))
+        elif ext in ("zip", "7z", "rar", "tar", "gz", "bz2"):
+            return self.table_icons.get("zip", self.table_icons.get("file", self.tree_icons.get("folder")))
+        return self.table_icons.get("file", self.tree_icons.get("folder"))
+
     def _center_window(self, win, w, h):
         win.update_idletasks()
         rx = self.root.winfo_x()
@@ -1096,6 +1132,7 @@ class ProDiscoverApp:
         action_menu.add_command(label="Disk Inventory...", command=self.action_disk_inventory)
         action_menu.add_separator()
         action_menu.add_command(label="Carve Deleted Files (CarvConfig.txt)...", command=self.dlg_carve_files)
+        action_menu.add_command(label="Recover Selected File...", accelerator="Ctrl+R", command=self.action_recover_file)
         action_menu.add_command(label="Audit Extension Mismatches (Headersig.txt)...", command=self.dlg_audit_mismatches)
         action_menu.add_command(label="Create Search Index...", command=self.action_create_search_index)
         self.menubar.add_cascade(label="Action", menu=action_menu)
@@ -1270,13 +1307,19 @@ class ProDiscoverApp:
         btn_export_f.pack(side=tk.LEFT, padx=2)
         btn_slack_f = tk.Button(filter_box, text="View Slack", font=("Tahoma", 8), relief=tk.RAISED, bd=1, command=self.action_view_slack)
         btn_slack_f.pack(side=tk.LEFT, padx=2)
+        btn_recover_f = tk.Button(filter_box, text="Recover File...", font=("Tahoma", 8, "bold"), relief=tk.RAISED, bd=1, command=self.action_recover_file)
+        btn_recover_f.pack(side=tk.LEFT, padx=2)
+        self.btn_toggle_deleted = tk.Button(filter_box, text="Deleted Only", font=("Tahoma", 8), relief=tk.RAISED, bd=1, command=self.action_toggle_deleted_only)
+        self.btn_toggle_deleted.pack(side=tk.LEFT, padx=2)
 
         f_table_border = tk.Frame(top_right, bd=2, relief=tk.SUNKEN)
         f_table_border.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
 
         # Table Grid matching Page 23 of ProDiscover manual
         cols = ("Select", "FileName", "FileExt", "Size", "Attributes", "Deleted", "CreatedDate", "ModifiedDate")
-        self.table = ttk.Treeview(f_table_border, columns=cols, show="headings", selectmode="browse")
+        self.table = ttk.Treeview(f_table_border, columns=cols, show="tree headings", selectmode="browse")
+        self.table.heading("#0", text="")
+        self.table.column("#0", width=26, minwidth=26, stretch=False, anchor="center")
         self.table.heading("Select", text="Select")
         self.table.heading("FileName", text="File Name")
         self.table.heading("FileExt", text="File Extension")
@@ -1295,6 +1338,10 @@ class ProDiscoverApp:
         self.table.column("CreatedDate", width=125, anchor="center")
         self.table.column("ModifiedDate", width=125, anchor="center")
 
+        self.table.tag_configure("deleted_row", foreground="#CC0000")
+        self.table.tag_configure("normal_row", foreground="#000000")
+        self.table.tag_configure("dir_row", foreground="#000040")
+
         tbl_scroll_y = ttk.Scrollbar(f_table_border, orient=tk.VERTICAL, command=self.table.yview)
         tbl_scroll_x = ttk.Scrollbar(f_table_border, orient=tk.HORIZONTAL, command=self.table.xview)
         self.table.configure(yscrollcommand=tbl_scroll_y.set, xscrollcommand=tbl_scroll_x.set)
@@ -1311,11 +1358,14 @@ class ProDiscoverApp:
         self.file_context_menu.add_command(label="Mark as Evidence of Interest", command=self.action_toggle_eoi)
         self.file_context_menu.add_command(label="View EXIF Data...", command=self.dlg_exif)
         self.file_context_menu.add_separator()
-        self.file_context_menu.add_command(label="Copy to Clipboard", command=self.action_copy_clipboard)
+        self.file_context_menu.add_command(label="Recover Deleted File...", command=self.action_recover_file)
         self.file_context_menu.add_command(label="Export File...", command=self.action_export_selected_file)
+        self.file_context_menu.add_command(label="Copy to Clipboard", command=self.action_copy_clipboard)
         self.file_context_menu.add_command(label="View Slack Space", command=self.action_view_slack)
         self.file_context_menu.add_command(label="Data InterPreter...", command=self.dlg_data_interpreter)
         self.table.bind("<Button-3>", self._on_table_right_click)
+        self.root.bind("<Control-r>", lambda e: self.action_recover_file())
+        self.root.bind("<Control-R>", lambda e: self.action_recover_file())
 
         self.v_paned.add(top_right, weight=2)
 
@@ -1756,6 +1806,7 @@ class ProDiscoverApp:
 
                     self.tree_dir_map = {}
                     self.dir_to_tree_item = {}
+                    self.tree_deleted_map = {}
 
                     # Insert detected partitions and their recursive directory hierarchies
                     if hasattr(self, "partitions") and self.partitions:
@@ -1787,6 +1838,19 @@ class ProDiscoverApp:
                                         add_subdirs(sub_tree_item, sub)
 
                                 add_subdirs(part_node, root_dir)
+
+                            # Dedicated node for all deleted files in this partition
+                            part_all_files = part.get("all_files", [])
+                            part_deleted = [f for f in part_all_files if f.get("is_deleted")]
+                            if part_deleted:
+                                del_icon = self.tree_icons.get("deleted")
+                                del_node = self.tree.insert(
+                                    part_node, 0,
+                                    text=f"[Deleted Files ({len(part_deleted)})]",
+                                    image=del_icon,
+                                    tags=("deleted_view", str(p_idx), norm_path)
+                                )
+                                self.tree_deleted_map[del_node] = (p_idx, part_deleted)
                     else:
                         self.tree.insert(
                             item_node, "end",
@@ -1853,17 +1917,17 @@ class ProDiscoverApp:
 
     def _on_table_click(self, event):
         region = self.table.identify("region", event.x, event.y)
-        if region == "cell":
+        if region in ("cell", "tree"):
             col = self.table.identify_column(event.x)
             if col == "#1":
                 row = self.table.identify_row(event.y)
                 if row:
                     vals = list(self.table.item(row, "values"))
-                    if vals[1] == ".. [Parent Directory]":
+                    if vals and len(vals) > 1 and vals[1] == ".. [Parent Directory]":
                         return
                     vals[0] = "[x]" if vals[0] == "[ ]" else "[ ]"
                     self.table.item(row, values=vals)
-                    fname = vals[1]
+                    fname = vals[1] if len(vals) > 1 else ""
                     status = "Marked as Evidence of Interest" if vals[0] == "[x]" else "Unmarked Evidence of Interest"
                     self.log_action(f"{status}: {fname}")
 
@@ -1877,7 +1941,8 @@ class ProDiscoverApp:
             parent_id = current_dir["parent_id"]
             parent_node = getattr(self, "all_dirs_map", {}).get(parent_id)
             parent_sec = parent_node.get("first_sector", 0) if parent_node else 0
-            self.table.insert("", "end", values=(
+            up_icon = self.table_icons.get("folder_up", self.table_icons.get("folder"))
+            self.table.insert("", "end", image=up_icon, values=(
                 "[ ]",
                 ".. [Parent Directory]",
                 "[DIR]",
@@ -1887,24 +1952,27 @@ class ProDiscoverApp:
                 "-",
                 "-",
                 str(parent_sec)
-            ))
+            ), tags=("dir_row",))
 
         for f in files:
             is_d = f.get("is_dir", False) or "d" in f.get("attributes", "")
+            is_del = f.get("is_deleted", False)
             if is_d:
                 folders += 1
                 size_str = "<DIR>"
                 ext_str = "[DIR]"
-                attr_str = "---d-------" if not f.get("is_deleted") else "---DELETED-"
+                attr_str = "---d-------" if not is_del else "---DELETED-"
             else:
                 file_cnt += 1
                 size_str = f"{f['size']:,} bytes"
                 ext_str = f.get("ext", "-") or "-"
                 attr_str = f.get("attributes", "---a-s-h-r-")
 
-            del_str = "YES" if f.get("is_deleted") else "NO"
+            del_str = "YES" if is_del else "NO"
+            row_tag = "deleted_row" if is_del else ("dir_row" if is_d else "normal_row")
+            row_icon = self._get_file_icon(f)
 
-            self.table.insert("", "end", values=(
+            self.table.insert("", "end", image=row_icon, values=(
                 "[ ]",
                 f["name"],
                 ext_str,
@@ -1914,7 +1982,7 @@ class ProDiscoverApp:
                 f.get("created", "-"),
                 f.get("modified", "-"),
                 f.get("first_sector", 0)
-            ))
+            ), tags=(row_tag,))
 
         self.sb_objects.config(text=f"{len(files)} Object(s) ({folders} Folder(s), {file_cnt} File(s))")
         children = self.table.get_children()
@@ -1976,7 +2044,21 @@ class ProDiscoverApp:
                         self.tree.see(tree_item)
             return
 
-        # 3. Regular file: load sector in data inspector
+        # 3. If it is a deleted file, prompt examiner to recover it
+        if vals[5] == "YES" or name.startswith("?"):
+            ans = messagebox.askyesno(
+                "Recover Deleted File",
+                f"Selected file '{name}' is a deleted forensic artifact.\n\n"
+                f"Recorded Size: {vals[3]}\n"
+                f"Starting Sector: {vals[8]}\n\n"
+                "Would you like to recover this file to disk now?\n(Click 'No' to inspect its raw sectors in Hex Inspector)",
+                parent=self.root
+            )
+            if ans:
+                self.action_recover_file()
+                return
+
+        # 4. Regular file: load sector in data inspector
         sec = int(vals[8]) if len(vals) > 8 and vals[8] not in ("-", "") else 0
         self.load_sector(sec)
 
@@ -2024,6 +2106,23 @@ class ProDiscoverApp:
                 else:
                     self.render_table(self.current_files, current_dir=self.current_dir_node)
                     self.load_sector(0)
+        elif tag_type == "deleted_view":
+            p_idx = 0
+            if len(tags) > 1 and tags[1].isdigit():
+                p_idx = int(tags[1])
+            del_list = []
+            if hasattr(self, "tree_deleted_map") and selected_id in self.tree_deleted_map:
+                p_idx, del_list = self.tree_deleted_map[selected_id]
+            elif hasattr(self, "partitions") and p_idx < len(self.partitions):
+                del_list = [f for f in self.partitions[p_idx].get("all_files", []) if f.get("is_deleted")]
+            self.current_dir_node = None
+            self.current_files = del_list
+            self.render_table(del_list)
+            disp_name = getattr(self, "current_media_name", None) or os.path.basename(self.current_media_path or "Image")
+            self.lbl_table_title.config(text=f"File List - [{disp_name}: All Deleted Files ({len(del_list)} found)]")
+            if del_list:
+                self.load_sector(del_list[0].get("first_sector", 0))
+            return
         elif tag_type in ("partition_root", "partition_item", "dir_item"):
             p_idx = 0
             if len(tags) > 1 and tags[1].isdigit():
@@ -3614,23 +3713,167 @@ class ProDiscoverApp:
     def action_export_selected_file(self):
         sel = self.table.selection()
         if not sel:
-            messagebox.showwarning("Export", "No file selected.")
+            messagebox.showwarning("Export File", "No file selected from table.", parent=self.root)
             return
         vals = self.table.item(sel[0], "values")
         fname = vals[1]
+        if fname == ".. [Parent Directory]":
+            messagebox.showinfo("Export File", "Cannot export parent directory link.", parent=self.root)
+            return
         try:
-            sz = int(vals[3].replace(",", "").split()[0]) if vals[3] != "-" else 0
+            sz_str = vals[3].replace(",", "").split()[0]
+            sz = int(sz_str) if sz_str not in ("-", "<DIR>") else 0
         except Exception:
             sz = 0
-        sec = int(vals[8]) if len(vals) > 8 and vals[8] != "-" and vals[8] != "" else 0
+        sec = int(vals[8]) if len(vals) > 8 and vals[8] not in ("-", "") else 0
 
-        dst = filedialog.asksaveasfilename(initialfile=fname)
+        # Sanitize filename for local OS saving
+        safe_fname = fname
+        if safe_fname.startswith("?"):
+            safe_fname = "recovered_" + safe_fname[1:]
+        for ch in r'<>:"/\|?*':
+            safe_fname = safe_fname.replace(ch, "_")
+        safe_fname = safe_fname.strip() or f"file_sec_{sec}.bin"
+
+        dst = filedialog.asksaveasfilename(initialfile=safe_fname, parent=self.root)
         if dst and self.current_media_path:
             raw_bytes = self.read_media_bytes(sec * 512, sz)
             with open(dst, "wb") as f_out:
                 f_out.write(raw_bytes)
             self.log_action(f"Exported evidence file '{fname}' ({len(raw_bytes):,} bytes) to {dst}")
-            messagebox.showinfo("Export File", f"File '{fname}' successfully extracted to:\n{dst} ({len(raw_bytes):,} bytes)")
+            messagebox.showinfo("Export File", f"File '{fname}' successfully extracted to:\n{dst} ({len(raw_bytes):,} bytes)", parent=self.root)
+
+    def action_recover_file(self):
+        sel = self.table.selection()
+        if not sel:
+            messagebox.showwarning("Recover File", "Please select a file from the table to recover.", parent=self.root)
+            return
+        vals = self.table.item(sel[0], "values")
+        if not vals:
+            return
+        fname = vals[1]
+        if fname == ".. [Parent Directory]":
+            messagebox.showinfo("Recover File", "Cannot recover parent directory link.", parent=self.root)
+            return
+
+        is_dir = (vals[2] == "[DIR]" or vals[3] == "<DIR>" or "d" in vals[4])
+
+        # Extract size
+        try:
+            sz_str = vals[3].replace(",", "").split()[0]
+            sz = int(sz_str) if sz_str not in ("<DIR>", "-") else 0
+        except Exception:
+            sz = 0
+
+        # Extract start sector
+        try:
+            sec = int(vals[8]) if len(vals) > 8 and vals[8] not in ("-", "") else 0
+        except Exception:
+            sec = 0
+
+        # If file size is 0 and it's not a directory, prompt examiner for bytes to carve/recover
+        if sz == 0 and not is_dir:
+            cluster_sz = 4096
+            if hasattr(self, "partitions") and self.partitions:
+                cluster_sz = self.partitions[0].get("cluster_size", 4096)
+            carve_prompt = simpledialog.askinteger(
+                "Recover Deleted File",
+                f"File '{fname}' has a recorded directory record size of 0 bytes.\n\n"
+                f"Enter number of contiguous bytes to carve from starting Sector {sec}:",
+                initialvalue=cluster_sz,
+                minvalue=512,
+                maxvalue=100 * 1024 * 1024,
+                parent=self.root
+            )
+            if carve_prompt is None:
+                return
+            sz = carve_prompt
+
+        # Sanitize filename for local OS (replace ?, *, :, /, \, etc.)
+        safe_name = fname
+        if safe_name.startswith("?"):
+            safe_name = "recovered_" + safe_name[1:]
+        for ch in r'<>:"/\|?*':
+            safe_name = safe_name.replace(ch, "_")
+        safe_name = safe_name.strip()
+        if not safe_name:
+            safe_name = f"recovered_file_sec{sec}.bin"
+
+        ext = vals[2]
+        if ext and ext not in ("-", "[DIR]") and not safe_name.upper().endswith(f".{ext.upper()}"):
+            safe_name += f".{ext.lower()}"
+
+        dst = filedialog.asksaveasfilename(
+            title=f"Recover Forensic File - {fname}",
+            initialfile=safe_name,
+            parent=self.root
+        )
+        if not dst:
+            return
+
+        if not self.current_media_path:
+            messagebox.showerror("Recover File", "No forensic media or image is currently open.", parent=self.root)
+            return
+
+        try:
+            raw_bytes = self.read_media_bytes(sec * 512, sz)
+            if not raw_bytes:
+                messagebox.showerror("Recover File", f"Failed to read {sz} bytes from Sector {sec}.", parent=self.root)
+                return
+
+            md5_hash = hashlib.md5(raw_bytes).hexdigest()
+            sha1_hash = hashlib.sha1(raw_bytes).hexdigest()
+
+            with open(dst, "wb") as f_out:
+                f_out.write(raw_bytes)
+
+            status_msg = f"Recovered deleted artifact '{fname}' ({len(raw_bytes):,} bytes, MD5: {md5_hash}) to {dst}"
+            self.log_action(status_msg)
+
+            messagebox.showinfo(
+                "File Recovery Successful",
+                f"Artifact successfully recovered bit-for-bit:\n\n"
+                f"Original Name:  {fname}\n"
+                f"Recovered Size: {len(raw_bytes):,} bytes\n"
+                f"Start Sector:   {sec} (Offset 0x{sec * 512:X})\n"
+                f"MD5 Hash:       {md5_hash}\n"
+                f"SHA-1 Hash:     {sha1_hash}\n\n"
+                f"Saved To:\n{dst}",
+                parent=self.root
+            )
+        except Exception as e:
+            messagebox.showerror("File Recovery Error", f"Failed to extract file:\n{e}", parent=self.root)
+
+    def action_toggle_deleted_only(self):
+        if not hasattr(self, "partitions") or not self.partitions:
+            return
+        if getattr(self, "showing_deleted_only", False):
+            self.showing_deleted_only = False
+            self.btn_toggle_deleted.config(text="Deleted Only", relief=tk.RAISED, bg="#ECE9D8")
+            if self.current_dir_node:
+                self.current_files = self.current_dir_node.get("files", [])
+                self.render_table(self.current_files, current_dir=self.current_dir_node)
+                disp_path = self.current_dir_node.get("path", "/")
+                disp_name = getattr(self, "current_media_name", None) or os.path.basename(self.current_media_path or "Root")
+                self.lbl_table_title.config(text=f"File List - [{disp_name}: {disp_path}]")
+            elif self.partitions:
+                p0 = self.partitions[0]
+                root_dir = p0.get("root_dir")
+                self.current_files = root_dir.get("files", []) if root_dir else p0.get("files", [])
+                self.render_table(self.current_files, current_dir=root_dir)
+                disp_name = getattr(self, "current_media_name", None) or os.path.basename(self.current_media_path or "Root")
+                self.lbl_table_title.config(text=f"File List - [{disp_name}: /]")
+        else:
+            self.showing_deleted_only = True
+            self.btn_toggle_deleted.config(text="Show All", relief=tk.SUNKEN, bg="#FFD0D0")
+            all_del = []
+            for p in self.partitions:
+                all_del.extend([f for f in p.get("all_files", []) if f.get("is_deleted")])
+            self.current_dir_node = None
+            self.current_files = all_del
+            self.render_table(all_del)
+            disp_name = getattr(self, "current_media_name", None) or os.path.basename(self.current_media_path or "Image")
+            self.lbl_table_title.config(text=f"File List - [{disp_name}: All Deleted Files ({len(all_del)} found)]")
 
     def action_view_slack(self):
         sel = self.table.selection()
