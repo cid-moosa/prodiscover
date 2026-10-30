@@ -320,8 +320,8 @@ class Win32DeviceStream:
 class FilesystemDetector:
     """
     Forensic Filesystem and Partition Parser supporting NTFS, FAT12, FAT16,
-    FAT32 (with Long File Names and deleted file recovery), and MBR Partition Tables.
-    Pure native Python implementation with zero subprocess dependencies.
+    FAT32 (with Long File Names, full recursive subdirectory traversal, and deleted file recovery),
+    and MBR Partition Tables. Pure native Python implementation with zero subprocess dependencies.
     """
     def __init__(self, read_fn, total_size):
         self.read_bytes = read_fn
@@ -346,7 +346,10 @@ class FilesystemDetector:
                         "start_sector": 0,
                         "sectors": self.total_sectors,
                         "cluster_size": res["cluster_size"],
-                        "files": res["files"]
+                        "root_dir": res.get("root_dir"),
+                        "all_dirs": res.get("all_dirs", {}),
+                        "files": res["files"],
+                        "all_files": res.get("all_files", res["files"])
                     }]
                 }
 
@@ -361,7 +364,10 @@ class FilesystemDetector:
                     "start_sector": 0,
                     "sectors": self.total_sectors,
                     "cluster_size": fat_res["cluster_size"],
-                    "files": fat_res["files"]
+                    "root_dir": fat_res.get("root_dir"),
+                    "all_dirs": fat_res.get("all_dirs", {}),
+                    "files": fat_res["files"],
+                    "all_files": fat_res.get("all_files", fat_res["files"])
                 }]
             }
 
@@ -388,6 +394,9 @@ class FilesystemDetector:
                     p_files = []
                     p_fs = f"Type 0x{p_type:02X}"
                     c_sz = 512
+                    r_dir = None
+                    a_dirs = {}
+                    a_files = []
 
                     if part_vbr[3:7] == b"NTFS":
                         n_res = self._parse_ntfs(p_offset)
@@ -395,12 +404,18 @@ class FilesystemDetector:
                             p_fs = "NTFS"
                             c_sz = n_res["cluster_size"]
                             p_files = n_res["files"]
+                            r_dir = n_res.get("root_dir")
+                            a_dirs = n_res.get("all_dirs", {})
+                            a_files = n_res.get("all_files", p_files)
                     else:
                         f_res = self._parse_fat(p_offset)
                         if f_res:
                             p_fs = f_res["type"]
                             c_sz = f_res["cluster_size"]
                             p_files = f_res["files"]
+                            r_dir = f_res.get("root_dir")
+                            a_dirs = f_res.get("all_dirs", {})
+                            a_files = f_res.get("all_files", p_files)
 
                     detected_parts.append({
                         "name": f"Partition {p_num} [{p_fs}] (LBA {lba:,})",
@@ -408,7 +423,10 @@ class FilesystemDetector:
                         "start_sector": lba,
                         "sectors": secs,
                         "cluster_size": c_sz,
-                        "files": p_files
+                        "root_dir": r_dir,
+                        "all_dirs": a_dirs,
+                        "files": p_files,
+                        "all_files": a_files if a_files else p_files
                     })
                 return {
                     "type": detected_parts[0]["type"] if len(detected_parts) == 1 else "Partitioned Disk",
@@ -445,8 +463,9 @@ class FilesystemDetector:
             record_sz = mft_rec_val * cluster_sz
             
         mft_offset = vbr_offset + (mft_lcn * cluster_sz)
-        files = []
-        for rec_idx in range(256):
+        parsed_records = {}
+
+        for rec_idx in range(512):
             rec_data = self.read_bytes(mft_offset + rec_idx * record_sz, record_sz)
             if len(rec_data) < record_sz or rec_data[:4] != b"FILE":
                 continue
@@ -456,6 +475,7 @@ class FilesystemDetector:
             attr_off = struct.unpack_from("<H", rec_data, 20)[0]
             file_name, file_size = "", 0
             created, modified, ads_name = "12/07/1999 05:00", "11/16/2001 22:40", ""
+            parent_rec = 5
 
             while attr_off < len(rec_data) - 8:
                 attr_type = struct.unpack_from("<I", rec_data, attr_off)[0]
@@ -487,11 +507,13 @@ class FilesystemDetector:
                 elif attr_type == 0x30 and non_res == 0:
                     info_off = attr_off + struct.unpack_from("<H", rec_data, attr_off + 20)[0]
                     if info_off + 66 <= len(rec_data):
+                        p_ref = struct.unpack_from("<Q", rec_data, info_off)[0] & 0x0000FFFFFFFFFFFF
                         fn_len = rec_data[info_off + 64]
                         fn_ns = rec_data[info_off + 65]
                         fn = rec_data[info_off + 66 : info_off + 66 + fn_len * 2].decode("utf-16le", errors="ignore")
                         if not file_name or fn_ns != 2:
                             file_name = fn
+                            parent_rec = p_ref
                             if file_size == 0:
                                 file_size = struct.unpack_from("<Q", rec_data, info_off + 48)[0]
 
@@ -503,26 +525,79 @@ class FilesystemDetector:
 
                 attr_off += attr_len
 
-            if file_name and file_name != ".":
-                attr_str = "---a-s-h-r-"
-                if is_dir: attr_str = "---d-------"
+            if file_name and file_name not in (".", "$Root"):
+                attr_str = "---d-------" if is_dir else "---a-s-h-r-"
                 if ads_name: attr_str = "---ADS---"
                 if not in_use: attr_str = "---DELETED-"
-                files.append({
+                item_ext = "[DIR]" if is_dir else (os.path.splitext(file_name)[1].lstrip(".").upper() or "-")
+
+                parsed_records[rec_idx] = {
+                    "mft_record": rec_idx,
                     "name": file_name,
-                    "ext": os.path.splitext(file_name)[1].lstrip(".").upper(),
+                    "ext": item_ext,
                     "size": file_size,
                     "attributes": attr_str,
+                    "is_dir": is_dir,
                     "is_deleted": not in_use,
                     "created": created,
                     "modified": modified,
                     "first_sector": (mft_offset // 512) + rec_idx * (record_sz // 512),
                     "cluster": mft_lcn,
-                    "slack": (cluster_sz - (file_size % cluster_sz)) if (cluster_sz > 0 and file_size % cluster_sz != 0) else 0,
-                    "mft_record": rec_idx,
-                    "ads": ads_name
-                })
-        return {"cluster_size": cluster_sz, "files": files}
+                    "slack": (cluster_sz - (file_size % cluster_sz)) if (cluster_sz > 0 and file_size % cluster_sz != 0 and not is_dir) else 0,
+                    "ads": ads_name,
+                    "parent_rec": parent_rec,
+                    "dir_id": f"ntfs_dir_{rec_idx}" if is_dir else None
+                }
+
+        # Build hierarchical NTFS directory tree
+        all_dirs = {}
+        all_files_flat = []
+        root_node = {
+            "id": "ntfs_dir_5",
+            "name": "Root Directory",
+            "path": "/",
+            "cluster": mft_lcn,
+            "first_sector": mft_offset // 512,
+            "parent_id": None,
+            "is_dir": True,
+            "subdirs": [],
+            "files": []
+        }
+        all_dirs["ntfs_dir_5"] = root_node
+
+        for rec_idx, r in parsed_records.items():
+            if r["is_dir"]:
+                dir_node = {
+                    "id": r["dir_id"],
+                    "name": r["name"],
+                    "path": f"/{r['name']}",
+                    "cluster": r["cluster"],
+                    "first_sector": r["first_sector"],
+                    "parent_id": f"ntfs_dir_{r['parent_rec']}" if r["parent_rec"] != 5 else "ntfs_dir_5",
+                    "is_dir": True,
+                    "subdirs": [],
+                    "files": []
+                }
+                all_dirs[r["dir_id"]] = dir_node
+
+        for rec_idx, r in parsed_records.items():
+            all_files_flat.append(r)
+            parent_id = f"ntfs_dir_{r['parent_rec']}" if (r['parent_rec'] in parsed_records or r['parent_rec'] == 5) else "ntfs_dir_5"
+            parent_dir = all_dirs.get(parent_id, root_node)
+            parent_dir["files"].append(r)
+            if r["is_dir"]:
+                child_dir = all_dirs.get(r["dir_id"])
+                if child_dir and child_dir not in parent_dir["subdirs"] and child_dir != parent_dir:
+                    parent_dir["subdirs"].append(child_dir)
+                    child_dir["path"] = f"{parent_dir['path'].rstrip('/')}/{r['name']}"
+
+        return {
+            "cluster_size": cluster_sz,
+            "root_dir": root_node,
+            "all_dirs": all_dirs,
+            "files": root_node["files"],
+            "all_files": all_files_flat
+        }
 
     def _parse_fat(self, vbr_offset):
         vbr = self.read_bytes(vbr_offset, 512)
@@ -541,15 +616,15 @@ class FilesystemDetector:
             return None
         tot_sec = tot16 if tot16 != 0 else tot32
         is_fat32 = (rde == 0 and fat16_sz == 0)
+        cluster_size = spc * bps
 
         if is_fat32:
             fat_sz = struct.unpack_from("<I", vbr, 36)[0]
             root_clus = struct.unpack_from("<I", vbr, 44)[0]
             first_data_sec = rsvd + (num_fats * fat_sz)
             fs_type = "FAT32"
-            cluster_size = spc * bps
-            root_off = vbr_offset + (first_data_sec + (root_clus - 2) * spc) * bps
-            dir_bytes = self.read_bytes(root_off, cluster_size * 4)
+            root_dir_sectors = 0
+            root_start_sec = first_data_sec + (root_clus - 2) * spc
         else:
             fat_sz = fat16_sz
             root_dir_sectors = ((rde * 32) + (bps - 1)) // bps
@@ -558,83 +633,199 @@ class FilesystemDetector:
             data_sec = tot_sec - first_data_sec
             total_clusters = data_sec // spc if spc > 0 else 0
             fs_type = "FAT12" if total_clusters < 4085 else "FAT16"
-            cluster_size = spc * bps
-            dir_bytes = self.read_bytes(vbr_offset + root_start_sec * bps, rde * 32)
 
-        files = []
-        lfn_parts = {}
-        for i in range(0, len(dir_bytes), 32):
-            entry = dir_bytes[i:i+32]
-            if len(entry) < 32 or entry[0] == 0x00:
-                break
-            first_byte = entry[0]
-            is_deleted = (first_byte == 0xE5)
-            attr = entry[11]
+        fat_offset = vbr_offset + rsvd * bps
+        fat_read_len = min(fat_sz * bps, 8 * 1024 * 1024)
+        fat_cache = self.read_bytes(fat_offset, fat_read_len)
 
-            if attr == 0x0F:
-                seq = entry[0] & 0x1F
-                name_chars = (
-                    entry[1:11].decode("utf-16le", errors="ignore") +
-                    entry[14:26].decode("utf-16le", errors="ignore") +
-                    entry[28:32].decode("utf-16le", errors="ignore")
-                )
-                lfn_parts[seq] = name_chars.split("\x00")[0]
-                continue
+        def get_fat_entry(c):
+            if c < 2: return None
+            if is_fat32:
+                pos = c * 4
+                if pos + 4 <= len(fat_cache):
+                    val = struct.unpack_from("<I", fat_cache, pos)[0] & 0x0FFFFFFF
+                else:
+                    raw = self.read_bytes(fat_offset + pos, 4)
+                    if len(raw) < 4: return None
+                    val = struct.unpack_from("<I", raw, 0)[0] & 0x0FFFFFFF
+                if val >= 0x0FFFFFF8 or val < 2: return None
+                return val
+            elif fs_type == "FAT16":
+                pos = c * 2
+                if pos + 2 <= len(fat_cache):
+                    val = struct.unpack_from("<H", fat_cache, pos)[0]
+                else:
+                    raw = self.read_bytes(fat_offset + pos, 2)
+                    if len(raw) < 2: return None
+                    val = struct.unpack_from("<H", raw, 0)[0]
+                if val >= 0xFFF8 or val < 2: return None
+                return val
+            else: # FAT12
+                pos = c + (c // 2)
+                if pos + 2 <= len(fat_cache):
+                    raw_val = struct.unpack_from("<H", fat_cache, pos)[0]
+                else:
+                    raw = self.read_bytes(fat_offset + pos, 2)
+                    if len(raw) < 2: return None
+                    raw_val = struct.unpack_from("<H", raw, 0)[0]
+                val = (raw_val & 0x0FFF) if (c % 2 == 0) else (raw_val >> 4)
+                if val >= 0x0FF8 or val < 2: return None
+                return val
 
-            if attr & 0x08 and not (attr & 0x10):
-                lfn_parts.clear()
-                continue
+        def get_cluster_chain(start_c, max_clusters=16384):
+            chain = []
+            curr = start_c
+            visited = set()
+            while curr and curr >= 2 and curr not in visited and len(chain) < max_clusters:
+                visited.add(curr)
+                chain.append(curr)
+                curr = get_fat_entry(curr)
+            return chain
 
-            if lfn_parts:
-                full_name = "".join(lfn_parts[k] for k in sorted(lfn_parts.keys()))
-                lfn_parts.clear()
-            else:
-                raw_name = bytearray(entry[0:8])
-                if is_deleted: raw_name[0] = ord('?')
-                name_str = raw_name.decode("latin1", errors="ignore").strip()
-                ext_str = entry[8:11].decode("latin1", errors="ignore").strip()
-                full_name = f"{name_str}.{ext_str}" if ext_str else name_str
+        def read_cluster_bytes(c):
+            sec = (vbr_offset // bps) + first_data_sec + (c - 2) * spc
+            return self.read_bytes(sec * bps, cluster_size)
 
-            high_clus = struct.unpack_from("<H", entry, 20)[0] if is_fat32 else 0
-            low_clus = struct.unpack_from("<H", entry, 26)[0]
-            start_clus = (high_clus << 16) | low_clus
-            file_size = struct.unpack_from("<I", entry, 28)[0]
-            first_sec = (vbr_offset // bps) + first_data_sec + (start_clus - 2) * spc if start_clus >= 2 else 0
+        def dos_dt(d, t):
+            try:
+                return f"{((d >> 5) & 0x0F):02d}/{(d & 0x1F):02d}/{(((d >> 9) & 0x7F) + 1980)} {((t >> 11) & 0x1F):02d}:{((t >> 5) & 0x3F):02d}"
+            except Exception:
+                return "11/12/2001 17:39"
 
-            c_date_raw = struct.unpack_from("<H", entry, 16)[0]
-            c_time_raw = struct.unpack_from("<H", entry, 14)[0]
-            m_date_raw = struct.unpack_from("<H", entry, 24)[0]
-            m_time_raw = struct.unpack_from("<H", entry, 22)[0]
+        all_dirs = {}
+        all_files_flat = []
+        dir_counter = [0]
+        visited_clus = set()
 
-            def dos_dt(d, t):
-                try:
-                    return f"{((d >> 5) & 0x0F):02d}/{(d & 0x1F):02d}/{(((d >> 9) & 0x7F) + 1980)} {((t >> 11) & 0x1F):02d}:{((t >> 5) & 0x3F):02d}"
-                except Exception:
-                    return "11/12/2001 17:39"
-
-            slack = 0
-            if file_size > 0 and cluster_size > 0:
-                rem = file_size % cluster_size
-                if rem > 0: slack = cluster_size - rem
-
-            attr_str = "---a-s-h-r-"
-            if attr & 0x10: attr_str = "---d-------"
-            if is_deleted: attr_str = "---DELETED-"
-
-            files.append({
-                "name": full_name,
-                "ext": os.path.splitext(full_name)[1].lstrip(".").upper(),
-                "size": file_size,
-                "attributes": attr_str,
-                "is_deleted": is_deleted,
-                "created": dos_dt(c_date_raw, c_time_raw),
-                "modified": dos_dt(m_date_raw, m_time_raw),
+        def parse_directory(dir_id, name, path, cluster, first_sec, raw_bytes, parent_id=None):
+            dir_node = {
+                "id": dir_id,
+                "name": name,
+                "path": path,
+                "cluster": cluster,
                 "first_sector": first_sec,
-                "cluster": start_clus,
-                "slack": slack
-            })
-        return {"type": fs_type, "cluster_size": cluster_size, "files": files}
+                "parent_id": parent_id,
+                "is_dir": True,
+                "subdirs": [],
+                "files": []
+            }
+            all_dirs[dir_id] = dir_node
 
+            lfn_parts = {}
+
+            for i in range(0, len(raw_bytes), 32):
+                entry = raw_bytes[i:i+32]
+                if len(entry) < 32 or entry[0] == 0x00:
+                    break
+                first_byte = entry[0]
+                is_deleted = (first_byte == 0xE5)
+                attr = entry[11]
+
+                if attr == 0x0F:
+                    seq = entry[0] & 0x1F
+                    name_chars = (
+                        entry[1:11].decode("utf-16le", errors="ignore") +
+                        entry[14:26].decode("utf-16le", errors="ignore") +
+                        entry[28:32].decode("utf-16le", errors="ignore")
+                    )
+                    lfn_parts[seq] = name_chars.split("\x00")[0]
+                    continue
+
+                if attr & 0x08 and not (attr & 0x10):
+                    lfn_parts.clear()
+                    continue
+
+                if lfn_parts:
+                    full_name = "".join(lfn_parts[k] for k in sorted(lfn_parts.keys()))
+                    lfn_parts.clear()
+                else:
+                    raw_name = bytearray(entry[0:8])
+                    if is_deleted: raw_name[0] = ord('?')
+                    name_str = raw_name.decode("latin1", errors="ignore").strip()
+                    ext_str = entry[8:11].decode("latin1", errors="ignore").strip()
+                    full_name = f"{name_str}.{ext_str}" if ext_str else name_str
+
+                if not full_name:
+                    continue
+
+                high_clus = struct.unpack_from("<H", entry, 20)[0] if is_fat32 else 0
+                low_clus = struct.unpack_from("<H", entry, 26)[0]
+                start_clus = (high_clus << 16) | low_clus
+                file_size = struct.unpack_from("<I", entry, 28)[0]
+                first_s = (vbr_offset // bps) + first_data_sec + (start_clus - 2) * spc if start_clus >= 2 else 0
+
+                c_date_raw = struct.unpack_from("<H", entry, 16)[0]
+                c_time_raw = struct.unpack_from("<H", entry, 14)[0]
+                m_date_raw = struct.unpack_from("<H", entry, 24)[0]
+                m_time_raw = struct.unpack_from("<H", entry, 22)[0]
+
+                is_dir = bool(attr & 0x10)
+                attr_str = "---d-------" if is_dir else "---a-s-h-r-"
+                if is_deleted: attr_str = "---DELETED-"
+
+                slack = 0
+                if not is_dir and file_size > 0 and cluster_size > 0:
+                    rem = file_size % cluster_size
+                    if rem > 0: slack = cluster_size - rem
+
+                item_ext = "[DIR]" if is_dir else (os.path.splitext(full_name)[1].lstrip(".").upper() or "-")
+                child_path = f"/{full_name}" if path == "/" else f"{path}/{full_name}"
+
+                dir_counter[0] += 1
+                child_dir_id = f"dir_{dir_counter[0]}" if is_dir else None
+
+                item_obj = {
+                    "name": full_name,
+                    "ext": item_ext,
+                    "size": file_size,
+                    "attributes": attr_str,
+                    "is_dir": is_dir,
+                    "is_deleted": is_deleted,
+                    "created": dos_dt(c_date_raw, c_time_raw),
+                    "modified": dos_dt(m_date_raw, m_time_raw),
+                    "first_sector": first_s,
+                    "cluster": start_clus,
+                    "slack": slack,
+                    "path": child_path,
+                    "dir_id": child_dir_id,
+                    "parent_id": dir_id
+                }
+
+                if is_dir:
+                    if full_name not in (".", ".."):
+                        dir_node["files"].append(item_obj)
+                        all_files_flat.append(item_obj)
+                        if start_clus >= 2 and start_clus not in visited_clus and not is_deleted:
+                            visited_clus.add(start_clus)
+                            sub_chain = get_cluster_chain(start_clus)
+                            sub_bytes = b"".join(read_cluster_bytes(c) for c in sub_chain)
+                            sub_dir_node = parse_directory(
+                                child_dir_id, full_name, child_path, start_clus, first_s, sub_bytes, parent_id=dir_id
+                            )
+                            dir_node["subdirs"].append(sub_dir_node)
+                else:
+                    dir_node["files"].append(item_obj)
+                    all_files_flat.append(item_obj)
+
+            return dir_node
+
+        # Build root directory
+        if is_fat32:
+            root_chain = get_cluster_chain(root_clus)
+            root_bytes = b"".join(read_cluster_bytes(c) for c in root_chain)
+            root_node = parse_directory("root", "Root Directory", "/", root_clus, root_start_sec, root_bytes, None)
+        else:
+            root_bytes = self.read_bytes(vbr_offset + root_start_sec * bps, rde * 32)
+            root_node = parse_directory("root", "Root Directory", "/", 0, root_start_sec, root_bytes, None)
+
+        return {
+            "type": fs_type,
+            "cluster_size": cluster_size,
+            "root_dir": root_node,
+            "all_dirs": all_dirs,
+            "files": root_node["files"],
+            "all_files": all_files_flat
+        }
 
 class ProDiscoverApp:
     def __init__(self, root):
@@ -674,6 +865,10 @@ class ProDiscoverApp:
         self.current_files = []
         self.partitions = []
         self.selected_file = None
+        self.current_dir_node = None
+        self.all_dirs_map = {}
+        self.tree_dir_map = {}
+        self.dir_to_tree_item = {}
         self.current_hex_mode = "hex"  # hex, text, slack
         self.audit_log = []
         self.stop_requested = False
@@ -1109,6 +1304,7 @@ class ProDiscoverApp:
         tbl_scroll_x.pack(side=tk.BOTTOM, fill=tk.X)
         self.table.bind("<<TreeviewSelect>>", self._on_table_select)
         self.table.bind("<Button-1>", self._on_table_click)
+        self.table.bind("<Double-1>", self._on_table_double_click)
 
         # Right-click context menu (Menu 289 from ProDiscover Basic)
         self.file_context_menu = tk.Menu(self.root, tearoff=0)
@@ -1558,15 +1754,39 @@ class ProDiscoverApp:
                     else:
                         item_node = self.tree.insert(target_parent, "end", text=f"{target_name} [{self.fs_type}]", open=True, tags=("loaded_media", norm_path))
 
-                    # Insert detected partitions
+                    self.tree_dir_map = {}
+                    self.dir_to_tree_item = {}
+
+                    # Insert detected partitions and their recursive directory hierarchies
                     if hasattr(self, "partitions") and self.partitions:
                         for p_idx, part in enumerate(self.partitions):
-                            self.tree.insert(
+                            root_dir = part.get("root_dir")
+                            root_dir_id = root_dir.get("id", f"p{p_idx}_root") if root_dir else f"p{p_idx}_root"
+                            part_node = self.tree.insert(
                                 item_node, "end",
                                 text=part["name"],
                                 image=folder_icon,
-                                tags=("partition_item", str(p_idx), norm_path)
+                                open=True,
+                                tags=("partition_item", str(p_idx), norm_path, root_dir_id)
                             )
+                            if root_dir:
+                                self.tree_dir_map[part_node] = (p_idx, root_dir)
+                                self.dir_to_tree_item[root_dir_id] = part_node
+
+                                def add_subdirs(parent_tree_item, d_node):
+                                    for sub in d_node.get("subdirs", []):
+                                        sub_tree_item = self.tree.insert(
+                                            parent_tree_item, "end",
+                                            text=sub["name"],
+                                            image=folder_icon,
+                                            open=False,
+                                            tags=("dir_item", sub["id"], str(p_idx), norm_path)
+                                        )
+                                        self.tree_dir_map[sub_tree_item] = (p_idx, sub)
+                                        self.dir_to_tree_item[sub["id"]] = sub_tree_item
+                                        add_subdirs(sub_tree_item, sub)
+
+                                add_subdirs(part_node, root_dir)
                     else:
                         self.tree.insert(
                             item_node, "end",
@@ -1590,10 +1810,10 @@ class ProDiscoverApp:
                     self.tree.see(item_node)
 
                     self.root.title(f"ProDiscover Basic - [Project - {disp_title}]")
-                    self.lbl_table_title.config(text=f"File List - [{disp_title}: Root Directory]")
+                    self.lbl_table_title.config(text=f"File List - [{disp_title}: /]")
                     self.sb_engine.config(text=f"Filesystem: {self.fs_type} (Native Win32 64-bit)")
 
-                    self.render_table(self.current_files)
+                    self.render_table(self.current_files, current_dir=self.current_dir_node)
                     self.load_sector(0)
 
                 self.dispatch_to_ui(on_complete)
@@ -1609,6 +1829,8 @@ class ProDiscoverApp:
     def _parse_media_filesystem(self):
         self.current_files = []
         self.partitions = []
+        self.all_dirs_map = {}
+        self.current_dir_node = None
         self.fs_type = "Raw Binary / Unknown"
         try:
             det = FilesystemDetector(self.read_media_bytes, self.current_media_size)
@@ -1616,8 +1838,16 @@ class ProDiscoverApp:
             self.fs_type = res.get("type", "Raw Binary / Unknown")
             self.partitions = res.get("partitions", [])
             if self.partitions:
-                self.current_files = self.partitions[0].get("files", [])
+                for part in self.partitions:
+                    if "all_dirs" in part:
+                        self.all_dirs_map.update(part["all_dirs"])
                 self.cluster_size = self.partitions[0].get("cluster_size", 512)
+                root_d = self.partitions[0].get("root_dir")
+                if root_d:
+                    self.current_dir_node = root_d
+                    self.current_files = root_d.get("files", [])
+                else:
+                    self.current_files = self.partitions[0].get("files", [])
         except Exception as e:
             self.log_action(f"Filesystem detection error: {e}")
 
@@ -1629,43 +1859,126 @@ class ProDiscoverApp:
                 row = self.table.identify_row(event.y)
                 if row:
                     vals = list(self.table.item(row, "values"))
+                    if vals[1] == ".. [Parent Directory]":
+                        return
                     vals[0] = "[x]" if vals[0] == "[ ]" else "[ ]"
                     self.table.item(row, values=vals)
                     fname = vals[1]
                     status = "Marked as Evidence of Interest" if vals[0] == "[x]" else "Unmarked Evidence of Interest"
                     self.log_action(f"{status}: {fname}")
 
-    def render_table(self, files):
+    def render_table(self, files, current_dir=None):
         self.table.delete(*self.table.get_children())
         folders = 0
         file_cnt = 0
 
+        # If current directory is a subfolder with a parent, show parent directory navigation at top
+        if current_dir and current_dir.get("parent_id"):
+            parent_id = current_dir["parent_id"]
+            parent_node = getattr(self, "all_dirs_map", {}).get(parent_id)
+            parent_sec = parent_node.get("first_sector", 0) if parent_node else 0
+            self.table.insert("", "end", values=(
+                "[ ]",
+                ".. [Parent Directory]",
+                "[DIR]",
+                "<DIR>",
+                "---d-------",
+                "NO",
+                "-",
+                "-",
+                str(parent_sec)
+            ))
+
         for f in files:
-            if "d" in f["attributes"]:
+            is_d = f.get("is_dir", False) or "d" in f.get("attributes", "")
+            if is_d:
                 folders += 1
+                size_str = "<DIR>"
+                ext_str = "[DIR]"
+                attr_str = "---d-------" if not f.get("is_deleted") else "---DELETED-"
             else:
                 file_cnt += 1
+                size_str = f"{f['size']:,} bytes"
+                ext_str = f.get("ext", "-") or "-"
+                attr_str = f.get("attributes", "---a-s-h-r-")
 
-            del_str = "YES" if f["is_deleted"] else "NO"
-            size_str = f"{f['size']:,} bytes"
+            del_str = "YES" if f.get("is_deleted") else "NO"
 
-            item_id = self.table.insert("", "end", values=(
+            self.table.insert("", "end", values=(
                 "[ ]",
                 f["name"],
-                f["ext"],
+                ext_str,
                 size_str,
-                f["attributes"],
+                attr_str,
                 del_str,
-                f["created"],
-                f["modified"],
-                f["first_sector"]
+                f.get("created", "-"),
+                f.get("modified", "-"),
+                f.get("first_sector", 0)
             ))
 
         self.sb_objects.config(text=f"{len(files)} Object(s) ({folders} Folder(s), {file_cnt} File(s))")
-        if files:
-            first_item = self.table.get_children()[0]
-            self.table.selection_set(first_item)
+        children = self.table.get_children()
+        if children:
+            self.table.selection_set(children[0])
             self._on_table_select(None)
+
+    def _on_table_double_click(self, event):
+        sel = self.table.selection()
+        if not sel:
+            return
+        vals = self.table.item(sel[0], "values")
+        if not vals:
+            return
+        name = vals[1]
+        ext = vals[2]
+
+        # 1. Double click on '..' goes up to parent
+        if name == ".. [Parent Directory]":
+            if self.current_dir_node and self.current_dir_node.get("parent_id"):
+                parent_id = self.current_dir_node["parent_id"]
+                parent_node = getattr(self, "all_dirs_map", {}).get(parent_id)
+                if parent_node:
+                    self.current_dir_node = parent_node
+                    self.current_files = parent_node.get("files", [])
+                    self.render_table(self.current_files, current_dir=parent_node)
+                    disp_path = parent_node.get("path", "/")
+                    disp_name = getattr(self, "current_media_name", None) or os.path.basename(self.current_media_path or "Root")
+                    self.lbl_table_title.config(text=f"File List - [{disp_name}: {disp_path}]")
+                    self.load_sector(parent_node.get("first_sector", 0))
+                    tree_item = getattr(self, "dir_to_tree_item", {}).get(parent_id)
+                    if tree_item and self.tree.exists(tree_item):
+                        self.tree.selection_set(tree_item)
+                        self.tree.see(tree_item)
+            return
+
+        # 2. Double click on a folder navigates into it
+        if ext == "[DIR]" or vals[3] == "<DIR>" or "d" in vals[4]:
+            target_entry = None
+            for f in self.current_files:
+                if f["name"] == name and (f.get("is_dir") or "d" in f.get("attributes", "")):
+                    target_entry = f
+                    break
+            
+            if target_entry and target_entry.get("dir_id"):
+                child_id = target_entry["dir_id"]
+                child_node = getattr(self, "all_dirs_map", {}).get(child_id)
+                if child_node:
+                    self.current_dir_node = child_node
+                    self.current_files = child_node.get("files", [])
+                    self.render_table(self.current_files, current_dir=child_node)
+                    disp_path = child_node.get("path", "/")
+                    disp_name = getattr(self, "current_media_name", None) or os.path.basename(self.current_media_path or "Root")
+                    self.lbl_table_title.config(text=f"File List - [{disp_name}: {disp_path}]")
+                    self.load_sector(child_node.get("first_sector", 0))
+                    tree_item = getattr(self, "dir_to_tree_item", {}).get(child_id)
+                    if tree_item and self.tree.exists(tree_item):
+                        self.tree.selection_set(tree_item)
+                        self.tree.see(tree_item)
+            return
+
+        # 3. Regular file: load sector in data inspector
+        sec = int(vals[8]) if len(vals) > 8 and vals[8] not in ("-", "") else 0
+        self.load_sector(sec)
 
     def _on_table_select(self, event):
         sel = self.table.selection()
@@ -1676,7 +1989,10 @@ class ProDiscoverApp:
             return
         name = vals[1]
         sz = vals[3]
-        sec = int(vals[8]) if vals[8] != "-" and vals[8] != "" else 0
+        if name == ".. [Parent Directory]":
+            self.sb_selected.config(text="Selected: .. [Parent Directory] (<DIR>)")
+            return
+        sec = int(vals[8]) if len(vals) > 8 and vals[8] not in ("-", "") else 0
 
         self.sb_selected.config(text=f"Selected: {name} ({sz}) | Sector {sec}")
         self.load_sector(sec)
@@ -1684,10 +2000,10 @@ class ProDiscoverApp:
     def _on_filter_changed(self, event):
         q = self.entry_filter.get().strip().lower()
         if not q:
-            self.render_table(self.current_files)
+            self.render_table(self.current_files, current_dir=self.current_dir_node)
             return
-        filtered = [f for f in self.current_files if q in f["name"].lower() or q in f["ext"].lower()]
-        self.render_table(filtered)
+        filtered = [f for f in self.current_files if q in f["name"].lower() or q in f.get("ext", "").lower()]
+        self.render_table(filtered, current_dir=self.current_dir_node)
 
     def _on_tree_select(self, event):
         sel = self.tree.selection()
@@ -1706,19 +2022,44 @@ class ProDiscoverApp:
                 if self.current_media_path != ev["path"]:
                     self.load_media(ev["path"], disk_name=ev["name"])
                 else:
-                    self.render_table(self.current_files)
+                    self.render_table(self.current_files, current_dir=self.current_dir_node)
                     self.load_sector(0)
-        elif tag_type in ("partition_root", "partition_item"):
+        elif tag_type in ("partition_root", "partition_item", "dir_item"):
             p_idx = 0
             if len(tags) > 1 and tags[1].isdigit():
                 p_idx = int(tags[1])
+
+            if tag_type == "dir_item":
+                tree_info = getattr(self, "tree_dir_map", {}).get(selected_id)
+                if tree_info:
+                    p_idx, target_dir = tree_info
+                    self.current_dir_node = target_dir
+                    self.current_files = target_dir.get("files", [])
+                    self.render_table(self.current_files, current_dir=target_dir)
+                    disp_path = target_dir.get("path", "/")
+                    disp_name = getattr(self, "current_media_name", None) or os.path.basename(self.current_media_path or "Root")
+                    self.lbl_table_title.config(text=f"File List - [{disp_name}: {disp_path}]")
+                    self.load_sector(target_dir.get("first_sector", 0))
+                    return
+
             if hasattr(self, "partitions") and p_idx < len(self.partitions):
                 part = self.partitions[p_idx]
-                self.current_files = part.get("files", [])
-                self.render_table(self.current_files)
-                self.lbl_table_title.config(text=f"File List - [{part.get('name', 'Partition')}]")
-                self.load_sector(part.get("start_sector", 0))
+                root_dir = part.get("root_dir")
+                if root_dir:
+                    self.current_dir_node = root_dir
+                    self.current_files = root_dir.get("files", [])
+                    self.render_table(self.current_files, current_dir=root_dir)
+                    disp_name = getattr(self, "current_media_name", None) or os.path.basename(self.current_media_path or "Root")
+                    self.lbl_table_title.config(text=f"File List - [{disp_name}: /]")
+                    self.load_sector(root_dir.get("first_sector", part.get("start_sector", 0)))
+                else:
+                    self.current_dir_node = None
+                    self.current_files = part.get("files", [])
+                    self.render_table(self.current_files)
+                    self.lbl_table_title.config(text=f"File List - [{part.get('name', 'Partition')}]")
+                    self.load_sector(part.get("start_sector", 0))
             else:
+                self.current_dir_node = None
                 self.render_table(self.current_files)
                 self.lbl_table_title.config(text=f"File List - [{os.path.basename(self.current_media_path or 'Root')}: Root Directory]")
                 self.load_sector(0)
@@ -3076,8 +3417,16 @@ class ProDiscoverApp:
             messagebox.showinfo("Extension Audit", "No active evidence files to audit.")
             return
 
+        target_files = []
+        if hasattr(self, "partitions") and self.partitions:
+            for p in self.partitions:
+                target_files.extend(p.get("all_files", []))
+        if not target_files:
+            target_files = self.current_files
+        target_files = [f for f in target_files if not (f.get("is_dir") or "d" in f.get("attributes", ""))]
+
         mismatches = []
-        for f in self.current_files:
+        for f in target_files:
             sec = int(f.get("first_sector", 0))
             sz = int(f.get("size", 0))
             ext = f.get("ext", "").upper()
@@ -3214,6 +3563,10 @@ class ProDiscoverApp:
         if self.current_media_path == ev_info.get("path") or not self.loaded_evidence:
             self.current_media_path = None
             self.current_files = []
+            self.current_dir_node = None
+            self.all_dirs_map = {}
+            self.tree_dir_map = {}
+            self.dir_to_tree_item = {}
             self.table.delete(*self.table.get_children())
             self.hex_text.delete("1.0", tk.END)
             self.hex_text.insert("1.0", "Ready. Open evidence image or physical drive to inspect raw sectors.\n")
@@ -3967,8 +4320,16 @@ class ProDiscoverApp:
 
         tree.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=10, pady=10)
 
+        target_files = []
+        if hasattr(self, "partitions") and self.partitions:
+            for p in self.partitions:
+                target_files.extend(p.get("all_files", []))
+        if not target_files:
+            target_files = self.current_files
+        target_files = [f for f in target_files if not (f.get("is_dir") or "d" in f.get("attributes", ""))]
+
         records = []
-        for f in self.current_files:
+        for f in target_files:
             sec = int(f.get("first_sector", 0))
             sz = int(f.get("size", 0))
             data = self.read_media_bytes(sec * 512, sz)
