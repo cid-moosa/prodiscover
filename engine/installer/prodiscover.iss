@@ -1,4 +1,4 @@
-﻿[Setup]
+[Setup]
 AppId={{C6287003-8B35-4A92-9844-075A1B82FD26}
 AppName=ProDiscover Basic & IR
 AppVersion=7.0.0.3
@@ -81,21 +81,5 @@ begin
   begin
     if Pos('desktop', Lowercase(WizardForm.TasksList.ItemCaption[i])) > 0 then
       WizardForm.TasksList.Checked[i] := True;
-  end;
-end;
-
-procedure CurPageChanged(CurPageID: Integer);
-begin
-  // Hide image on Finished page as requested by user
-  if CurPageID = wpFinished then
-  begin
-    if WizardForm.WizardBitmapImage2 <> nil then
-      WizardForm.WizardBitmapImage2.Visible := False;
-
-    // Reposition finished texts to fill full wizard width cleanly
-    WizardForm.FinishedHeadingLabel.Left := ScaleX(20);
-    WizardForm.FinishedHeadingLabel.Width := WizardForm.FinishedPage.Width - ScaleX(40);
-    WizardForm.FinishedLabel.Left := ScaleX(20);
-    WizardForm.FinishedLabel.Width := WizardForm.FinishedPage.Width - ScaleX(40);
   end;
 end;

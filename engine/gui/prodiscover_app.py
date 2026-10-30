@@ -5610,6 +5610,26 @@ class ProDiscoverApp:
         tk.Button(btn_box, text="Close", font=("Tahoma", 8), width=8, command=dlg.destroy).pack(side=tk.RIGHT)
 
 def main():
+    if sys.platform == "win32" and not is_admin():
+        if "--elevated" not in sys.argv:
+            try:
+                args = [a for a in sys.argv[1:] if a != "--elevated"] + ["--elevated"]
+                params = " ".join(f'"{a}"' if " " in a else a for a in args)
+                if getattr(sys, "frozen", False):
+                    executable = sys.executable
+                    exec_params = params
+                else:
+                    executable = sys.executable
+                    exec_params = f'"{os.path.abspath(sys.argv[0])}" {params}'.strip()
+
+                ret = ctypes.windll.shell32.ShellExecuteW(
+                    None, "runas", executable, exec_params, None, 1
+                )
+                if ret > 32:
+                    sys.exit(0)
+            except Exception:
+                pass
+
     root = tk.Tk()
     app = ProDiscoverApp(root)
     root.mainloop()
