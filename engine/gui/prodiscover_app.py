@@ -4346,53 +4346,403 @@ class ProDiscoverApp:
         refresh_val()
 
     def dlg_exif(self):
+        import io
+        import webbrowser
+        from PIL.ExifTags import TAGS, GPSTAGS, IFD
+
         sel = self.table.selection()
         if not sel:
-            messagebox.showinfo("EXIF Viewer", "Please select a file to view its EXIF metadata.")
+            messagebox.showinfo("EXIF Viewer", "Please select a file from the evidence table to view its metadata.", parent=self.root)
             return
 
         vals = self.table.item(sel[0], "values")
+        if not vals:
+            return
         fname = vals[1]
-        ext = vals[2].lower()
+        ext_raw = vals[2].lower().lstrip(".")
 
-        if ext not in [".jpg", ".jpeg", ".tif", ".tiff"]:
-            messagebox.showinfo("EXIF Viewer", f"File '{fname}' is not a JPEG/TIFF image format.")
+        if fname == ".. [Parent Directory]":
+            messagebox.showinfo("EXIF Viewer", "Cannot inspect metadata for parent directory link.", parent=self.root)
             return
 
-        dlg = tk.Toplevel(self.root)
-        dlg.title(f"EXIF Metadata - [{fname}]")
-        dlg.geometry("500x420")
-        self._center_window(dlg, 500, 420)
+        try:
+            sz_str = vals[3].replace(",", "").split()[0]
+            sz = int(sz_str) if sz_str not in ("-", "<DIR>") else 0
+        except Exception:
+            sz = 0
 
-        tree = ttk.Treeview(dlg, columns=("Tag", "Value"), show="headings", height=15)
-        tree.heading("Tag", text="EXIF Property")
-        tree.heading("Value", text="Value")
-        tree.column("Tag", width=180)
-        tree.column("Value", width=280)
-        tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        sec = int(vals[8]) if len(vals) > 8 and vals[8] not in ("-", "") else 0
 
-        # Check sample pics first or extract from evidence
-        sample_path = resolve_file(f"referance/prodiskovey/Sample Pics/{fname}")
-        found_exif = False
-        if os.path.exists(sample_path):
+        # Retrieve raw image bytes from evidence or local sample pics fallback
+        raw_bytes = b""
+        if self.current_media_path and sz > 0:
+            raw_bytes = self.read_media_bytes(sec * 512, min(sz, 50 * 1024 * 1024))
+
+        if not raw_bytes or len(raw_bytes) < 4:
+            sample_candidates = [
+                resolve_file(f"referance/prodiskovey/Sample Pics/{fname}"),
+                resolve_file(f"Sample Pics/{fname}"),
+                resolve_file(f"engine/gui/assets/{fname}")
+            ]
+            for cand in sample_candidates:
+                if cand and os.path.exists(cand) and os.path.isfile(cand):
+                    try:
+                        with open(cand, "rb") as f_in:
+                            raw_bytes = f_in.read()
+                        break
+                    except Exception:
+                        pass
+
+        if not raw_bytes:
+            messagebox.showwarning(
+                "EXIF Viewer",
+                f"Cannot inspect metadata for '{fname}':\n"
+                f"File has 0 recorded bytes or contains no readable data at Sector {sec}.",
+                parent=self.root
+            )
+            return
+
+        # Magic byte detection
+        header = raw_bytes[:16]
+        actual_fmt = None
+        if header.startswith(b"\xff\xd8\xff"): actual_fmt = "JPEG"
+        elif header.startswith(b"BM"): actual_fmt = "BMP"
+        elif header.startswith(b"\x89PNG\r\n\x1a\n"): actual_fmt = "PNG"
+        elif header.startswith(b"GIF8"): actual_fmt = "GIF"
+        elif header[:4] in (b"II*\x00", b"MM\x00*"): actual_fmt = "TIFF"
+        elif header[:4] == b"RIFF" and len(raw_bytes) > 12 and raw_bytes[8:12] == b"WEBP": actual_fmt = "WEBP"
+
+        clean_ext = ext_raw.upper()
+        is_mismatch = False
+        if actual_fmt and clean_ext not in ("-", "", "BIN", "DAT", "[DIR]"):
+            if actual_fmt == "JPEG" and clean_ext not in ("JPG", "JPEG", "JPE", "JFIF"):
+                is_mismatch = True
+            elif actual_fmt == "BMP" and clean_ext not in ("BMP", "DIB"):
+                is_mismatch = True
+            elif actual_fmt == "PNG" and clean_ext != "PNG":
+                is_mismatch = True
+
+        md5_hex = hashlib.md5(raw_bytes).hexdigest()
+        sha1_hex = hashlib.sha1(raw_bytes).hexdigest()
+
+        pil_im = None
+        exif_props = []
+        gps_dict = {}
+        dims_str = "-"
+        mode_str = "-"
+        format_display = actual_fmt or "Unknown Graphic / Binary"
+        thumb_photo = None
+
+        try:
+            pil_im = Image.open(io.BytesIO(raw_bytes))
+            format_display = pil_im.format or actual_fmt or "Raster Graphic"
+            dims_str = f"{pil_im.width} x {pil_im.height}"
+            mp = (pil_im.width * pil_im.height) / 1000000.0
+            if mp >= 0.05:
+                dims_str += f" ({mp:.2f} Megapixels)"
+            mode_str = f"{pil_im.mode} ({len(pil_im.getbands()) * 8}-bit)"
+
+            # Create scaled thumbnail preserving aspect ratio
+            im_thumb = pil_im.copy()
+            im_thumb.thumbnail((240, 180), Image.Resampling.LANCZOS)
+            thumb_photo = ImageTk.PhotoImage(im_thumb)
+
+            # Extract EXIF tags
+            raw_exif = pil_im.getexif()
+            tag_collector = {}
+            if raw_exif:
+                for tid, val in raw_exif.items():
+                    tag_collector[TAGS.get(tid, str(tid))] = val
+                try:
+                    sub_exif = raw_exif.get_ifd(IFD.Exif)
+                    for tid, val in sub_exif.items():
+                        tag_collector[TAGS.get(tid, str(tid))] = val
+                except Exception:
+                    pass
+                try:
+                    sub_gps = raw_exif.get_ifd(IFD.GPSInfo)
+                    for tid, val in sub_gps.items():
+                        gname = GPSTAGS.get(tid, str(tid))
+                        gps_dict[gname] = val
+                        tag_collector[f"GPS_{gname}"] = val
+                except Exception:
+                    pass
+
+            # Legacy fallback for older Pillow formats
+            if hasattr(pil_im, "_getexif"):
+                leg = pil_im._getexif()
+                if leg:
+                    for tid, val in leg.items():
+                        tname = TAGS.get(tid, str(tid))
+                        if tname not in tag_collector:
+                            tag_collector[tname] = val
+
+            for prop_name, prop_val in tag_collector.items():
+                val_repr = str(prop_val)
+                if isinstance(prop_val, bytes):
+                    val_repr = prop_val.decode("latin1", errors="replace").strip()
+                elif isinstance(prop_val, tuple) and len(prop_val) == 2 and prop_val[1] != 0:
+                    try:
+                        val_repr = f"{prop_val[0] / prop_val[1]:.4f} ({prop_val[0]}/{prop_val[1]})"
+                    except Exception:
+                        pass
+
+                if prop_name.startswith("GPS_") or prop_name in ("GPSInfo",):
+                    cat = "GPS Location"
+                elif any(w in prop_name for w in ("Make", "Model", "Lens", "Software", "Artist", "Copyright", "Body", "Camera")):
+                    cat = "Camera / Device"
+                elif any(w in prop_name for w in ("Date", "Time", "Exposure", "ISO", "Shutter", "Aperture", "Flash", "Focal", "Metering", "WhiteBalance")):
+                    cat = "Capture Settings"
+                elif any(w in prop_name for w in ("Width", "Height", "Resolution", "ColorSpace", "Orientation", "Compression", "Samples")):
+                    cat = "Image Geometry"
+                else:
+                    cat = "Technical EXIF"
+                exif_props.append((cat, prop_name, val_repr))
+
+        except Exception as err:
+            if header.startswith(b".          \x10"):
+                exif_props.append(("Forensic Notice", "Cluster Overwritten", "Starting cluster contains FAT directory records (.) and (..) instead of image pixels."))
+                exif_props.append(("Forensic Notice", "Carving Required", "The original image payload was deleted and overwritten. Use 'Action -> Carve Deleted Files'."))
+            elif set(raw_bytes[:256]) == {0}:
+                exif_props.append(("Forensic Notice", "Zero Fill", "Starting sector contains all 0x00 null bytes (Unallocated slack / zero gap)."))
+            else:
+                exif_props.append(("Forensic Notice", "Decoding Warning", f"Could not decode graphic stream: {err}"))
+
+        # Add File System & Integrity Properties
+        exif_props.append(("File System", "File Name", fname))
+        exif_props.append(("File System", "Extension", clean_ext or "-"))
+        exif_props.append(("File System", "Detected Payload", actual_fmt or "Raw Binary"))
+        exif_props.append(("File System", "File Size", f"{len(raw_bytes):,} bytes"))
+        exif_props.append(("File System", "Sector Location", f"Sector {sec} (Byte Offset: 0x{sec*512:X})"))
+        exif_props.append(("Forensic Integrity", "MD5 Hash", md5_hex))
+        exif_props.append(("Forensic Integrity", "SHA-1 Hash", sha1_hex))
+
+        if is_mismatch:
+            exif_props.insert(0, ("Forensic Alert", "EXTENSION MISMATCH", f"File extension is .{clean_ext}, but actual payload is {actual_fmt}!"))
+
+        # GPS Geolocation parsing
+        gps_readable = None
+        gps_map_url = None
+        if gps_dict:
             try:
-                from PIL.ExifTags import TAGS
-                im = Image.open(sample_path)
-                raw_exif = im._getexif()
-                if raw_exif:
-                    for tid, val in raw_exif.items():
-                        tag_name = TAGS.get(tid, str(tid))
-                        tree.insert("", "end", values=(tag_name, str(val)[:100]))
-                        found_exif = True
+                lat_raw = gps_dict.get("GPSLatitude")
+                lat_ref = gps_dict.get("GPSLatitudeRef", "N")
+                lon_raw = gps_dict.get("GPSLongitude")
+                lon_ref = gps_dict.get("GPSLongitudeRef", "W")
+                if lat_raw and lon_raw:
+                    def _coord(c):
+                        d = float(c[0][0]/c[0][1] if isinstance(c[0], tuple) else c[0])
+                        m = float(c[1][0]/c[1][1] if isinstance(c[1], tuple) else c[1])
+                        s = float(c[2][0]/c[2][1] if isinstance(c[2], tuple) else c[2])
+                        return d + (m / 60.0) + (s / 3600.0)
+                    lat_d = _coord(lat_raw)
+                    if str(lat_ref).upper().startswith("S"): lat_d = -lat_d
+                    lon_d = _coord(lon_raw)
+                    if str(lon_ref).upper().startswith("W"): lon_d = -lon_d
+                    gps_readable = f"{lat_d:.6f}, {lon_d:.6f} [{lat_ref} {lat_d:.4f}, {lon_ref} {lon_d:.4f}]"
+                    gps_map_url = f"https://www.google.com/maps?q={lat_d:.6f},{lon_d:.6f}"
             except Exception:
                 pass
 
-        if not found_exif:
-            tree.insert("", "end", values=("FileName", fname))
-            tree.insert("", "end", values=("Extension", ext))
-            tree.insert("", "end", values=("ImageSize", f"{vals[3]} bytes"))
-            tree.insert("", "end", values=("CreatedDate", vals[6]))
-            tree.insert("", "end", values=("Status", "Embedded EXIF parsed from evidence clusters."))
+        # Build Forensic Dialog Window
+        dlg = tk.Toplevel(self.root)
+        dlg.title(f"Forensic EXIF Metadata & Media Inspector - [{fname}]")
+        dlg.geometry("920x620")
+        dlg.minsize(780, 500)
+        self._center_window(dlg, 920, 620)
+        dlg.configure(bg="#ECE9D8")
+
+        # Top Header Banner
+        header_f = tk.Frame(dlg, bg="#002D62", padx=12, pady=8)
+        header_f.pack(fill=tk.X)
+        tk.Label(header_f, text="EXIF METADATA & FORENSIC MEDIA INSPECTOR", font=("Segoe UI", 11, "bold"), fg="#FFFFFF", bg="#002D62").pack(anchor="w")
+        tk.Label(header_f, text=f"Artifact: {fname}  |  Format: {format_display}  |  Starting Sector: {sec}  |  MD5: {md5_hex[:16]}...", font=("Segoe UI", 8), fg="#D0E0FF", bg="#002D62").pack(anchor="w")
+
+        # Main Body Splitter
+        body_paned = ttk.PanedWindow(dlg, orient=tk.HORIZONTAL)
+        body_paned.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+
+        # Left Pane: Image Preview & Summary
+        left_f = tk.Frame(body_paned, bg="#ECE9D8", width=280)
+        body_paned.add(left_f, weight=1)
+
+        preview_card = tk.LabelFrame(left_f, text=" Graphic Stream Preview ", font=("Tahoma", 8, "bold"), bg="#ECE9D8", padx=6, pady=6)
+        preview_card.pack(fill=tk.X, padx=4, pady=4)
+
+        if thumb_photo:
+            lbl_thumb = tk.Label(preview_card, image=thumb_photo, bg="#FFFFFF", bd=1, relief=tk.SUNKEN)
+            lbl_thumb.image = thumb_photo  # keep reference
+            lbl_thumb.pack(padx=4, pady=4)
+        else:
+            box_text = "[NO DECODABLE RASTER STREAM]\n\n"
+            if header.startswith(b".          \x10"):
+                box_text += "Sector overwritten by\nFAT Directory Records (.)."
+            elif set(raw_bytes[:256]) == {0}:
+                box_text += "Zero-filled Unallocated Gap."
+            else:
+                box_text += "Non-graphic binary payload\nor fragmented cluster."
+            lbl_no_thumb = tk.Label(preview_card, text=box_text, font=("Tahoma", 8), bg="#FFF2F2", fg="#990000", bd=1, relief=tk.SUNKEN, padx=10, pady=25)
+            lbl_no_thumb.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+
+        # Quick Facts Card
+        facts_card = tk.LabelFrame(left_f, text=" Forensic Quick Facts ", font=("Tahoma", 8, "bold"), bg="#ECE9D8", padx=6, pady=6)
+        facts_card.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+
+        facts = [
+            ("Container:", format_display),
+            ("Dimensions:", dims_str),
+            ("Color Space:", mode_str),
+            ("File Size:", f"{len(raw_bytes):,} bytes"),
+            ("Start Sector:", str(sec)),
+            ("Offset:", f"0x{sec*512:X}"),
+            ("MD5:", md5_hex[:16] + "..."),
+            ("SHA-1:", sha1_hex[:16] + "..."),
+        ]
+        for r_idx, (k, v) in enumerate(facts):
+            tk.Label(facts_card, text=k, font=("Tahoma", 8, "bold"), bg="#ECE9D8", anchor="w").grid(row=r_idx, column=0, sticky="w", pady=1)
+            tk.Label(facts_card, text=v, font=("Tahoma", 8), bg="#ECE9D8", anchor="w").grid(row=r_idx, column=1, sticky="w", padx=4, pady=1)
+
+        if is_mismatch:
+            lbl_alert = tk.Label(facts_card, text=f"EXTENSION MISMATCH:\nFile is {actual_fmt}, not .{clean_ext}!", font=("Tahoma", 8, "bold"), fg="#CC0000", bg="#FFF0F0", bd=1, relief=tk.SOLID, padx=4, pady=4)
+            lbl_alert.grid(row=len(facts), column=0, columnspan=2, sticky="ew", pady=6)
+
+        left_btn_f = tk.Frame(left_f, bg="#ECE9D8")
+        left_btn_f.pack(fill=tk.X, padx=4, pady=4)
+
+        def export_image_payload():
+            safe_name = fname
+            if safe_name.startswith("?"): safe_name = "recovered_" + safe_name[1:]
+            for ch in r'<>:"/\|?*': safe_name = safe_name.replace(ch, "_")
+            ext_suffix = f".{actual_fmt.lower()}" if actual_fmt and not safe_name.lower().endswith(f".{actual_fmt.lower()}") else ""
+            dst = filedialog.asksaveasfilename(parent=dlg, title="Export Graphic Artifact", initialfile=safe_name + ext_suffix)
+            if dst:
+                with open(dst, "wb") as f_out: f_out.write(raw_bytes)
+                messagebox.showinfo("Export Image", f"Graphic payload ({len(raw_bytes):,} bytes) saved to:\n{dst}", parent=dlg)
+
+        def copy_hashes_clip():
+            txt = f"Artifact: {fname}\nMD5: {md5_hex}\nSHA-1: {sha1_hex}\nSize: {len(raw_bytes)} bytes\nSector: {sec}"
+            dlg.clipboard_clear()
+            dlg.clipboard_append(txt)
+            messagebox.showinfo("Clipboard", "Cryptographic hashes copied to clipboard.", parent=dlg)
+
+        tk.Button(left_btn_f, text="Export Image Payload...", font=("Tahoma", 8), relief=tk.RAISED, bd=1, command=export_image_payload).pack(fill=tk.X, pady=2)
+        tk.Button(left_btn_f, text="Copy Hashes", font=("Tahoma", 8), relief=tk.RAISED, bd=1, command=copy_hashes_clip).pack(fill=tk.X, pady=2)
+
+        # Right Pane: Metadata Grid & Filter
+        right_f = tk.Frame(body_paned, bg="#ECE9D8")
+        body_paned.add(right_f, weight=3)
+
+        # GPS Alert Banner if present
+        if gps_readable:
+            gps_card = tk.Frame(right_f, bg="#E6F2FF", bd=1, relief=tk.SOLID, padx=8, pady=6)
+            gps_card.pack(fill=tk.X, padx=4, pady=4)
+            tk.Label(gps_card, text=f"GPS Geolocation Detected:  {gps_readable}", font=("Tahoma", 8, "bold"), fg="#003366", bg="#E6F2FF").pack(side=tk.LEFT, padx=4)
+
+            def open_map():
+                if gps_map_url: webbrowser.open(gps_map_url)
+
+            def copy_gps():
+                dlg.clipboard_clear()
+                dlg.clipboard_append(gps_readable)
+                messagebox.showinfo("Clipboard", "GPS coordinates copied.", parent=dlg)
+
+            tk.Button(gps_card, text="Open Map", font=("Tahoma", 7, "bold"), relief=tk.RAISED, bd=1, command=open_map).pack(side=tk.RIGHT, padx=2)
+            tk.Button(gps_card, text="Copy GPS", font=("Tahoma", 7), relief=tk.RAISED, bd=1, command=copy_gps).pack(side=tk.RIGHT, padx=2)
+
+        # Filter & Search Toolbar
+        filter_bar = tk.Frame(right_f, bg="#ECE9D8")
+        filter_bar.pack(fill=tk.X, padx=4, pady=4)
+        tk.Label(filter_bar, text="Filter Properties:", font=("Tahoma", 8, "bold"), bg="#ECE9D8").pack(side=tk.LEFT, padx=2)
+        entry_search = tk.Entry(filter_bar, font=("Tahoma", 8), width=24, bd=1, relief=tk.SUNKEN)
+        entry_search.pack(side=tk.LEFT, padx=4)
+
+        cat_var = tk.StringVar(value="All Categories")
+        cats = ["All Categories"] + sorted(list({p[0] for p in exif_props}))
+        combo_cat = ttk.Combobox(filter_bar, textvariable=cat_var, values=cats, state="readonly", width=18, font=("Tahoma", 8))
+        combo_cat.pack(side=tk.LEFT, padx=4)
+
+        lbl_count = tk.Label(filter_bar, text=f"{len(exif_props)} Properties Found", font=("Tahoma", 8), bg="#ECE9D8", fg="#404040")
+        lbl_count.pack(side=tk.RIGHT, padx=4)
+
+        # Metadata Treeview
+        tree_border = tk.Frame(right_f, bd=2, relief=tk.SUNKEN)
+        tree_border.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+
+        cols = ("Category", "Property", "Value")
+        tree_meta = ttk.Treeview(tree_border, columns=cols, show="headings", selectmode="browse")
+        tree_meta.heading("Category", text="Category")
+        tree_meta.heading("Property", text="EXIF Property")
+        tree_meta.heading("Value", text="Value")
+
+        tree_meta.column("Category", width=130, anchor="w")
+        tree_meta.column("Property", width=190, anchor="w")
+        tree_meta.column("Value", width=340, anchor="w")
+
+        tree_meta.tag_configure("alert_tag", foreground="#CC0000", font=("Tahoma", 8, "bold"))
+        tree_meta.tag_configure("gps_tag", foreground="#006600")
+        tree_meta.tag_configure("norm_tag", foreground="#000000")
+
+        sb_y = ttk.Scrollbar(tree_border, orient=tk.VERTICAL, command=tree_meta.yview)
+        sb_x = ttk.Scrollbar(tree_border, orient=tk.HORIZONTAL, command=tree_meta.xview)
+        tree_meta.configure(yscrollcommand=sb_y.set, xscrollcommand=sb_x.set)
+
+        tree_meta.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sb_y.pack(side=tk.RIGHT, fill=tk.Y)
+        sb_x.pack(side=tk.BOTTOM, fill=tk.X)
+
+        def populate_tree():
+            tree_meta.delete(*tree_meta.get_children())
+            q = entry_search.get().strip().lower()
+            sel_cat = cat_var.get()
+            shown = 0
+            for cat, prop, val in exif_props:
+                if sel_cat != "All Categories" and cat != sel_cat:
+                    continue
+                if q and (q not in cat.lower() and q not in prop.lower() and q not in val.lower()):
+                    continue
+                row_tag = "alert_tag" if "ALERT" in cat.upper() or "MISMATCH" in prop.upper() else ("gps_tag" if "GPS" in cat.upper() else "norm_tag")
+                tree_meta.insert("", "end", values=(cat, prop, val), tags=(row_tag,))
+                shown += 1
+            lbl_count.config(text=f"{shown} / {len(exif_props)} Properties")
+
+        entry_search.bind("<KeyRelease>", lambda e: populate_tree())
+        combo_cat.bind("<<ComboboxSelected>>", lambda e: populate_tree())
+        populate_tree()
+
+        # Bottom Button Bar
+        btn_bar = tk.Frame(right_f, bg="#ECE9D8")
+        btn_bar.pack(fill=tk.X, padx=4, pady=6)
+
+        def export_csv():
+            dst = filedialog.asksaveasfilename(parent=dlg, defaultextension=".csv", filetypes=[("CSV Files (*.csv)", "*.csv")], initialfile=f"EXIF_{fname}.csv")
+            if dst:
+                with open(dst, "w", encoding="utf-8") as f_out:
+                    f_out.write("Category,Property,Value\n")
+                    for cat, prop, val in exif_props:
+                        safe_val = val.replace('"', '""')
+                        f_out.write(f'"{cat}","{prop}","{safe_val}"\n')
+                messagebox.showinfo("Export EXIF", f"EXIF metadata exported to {dst}", parent=dlg)
+
+        def export_json():
+            dst = filedialog.asksaveasfilename(parent=dlg, defaultextension=".json", filetypes=[("JSON Files (*.json)", "*.json")], initialfile=f"EXIF_{fname}.json")
+            if dst:
+                out_dict = {"filename": fname, "md5": md5_hex, "sha1": sha1_hex, "sector": sec, "properties": {prop: val for cat, prop, val in exif_props}}
+                with open(dst, "w", encoding="utf-8") as f_out:
+                    json.dump(out_dict, f_out, indent=2)
+                messagebox.showinfo("Export EXIF", f"EXIF JSON exported to {dst}", parent=dlg)
+
+        def copy_selected_prop():
+            sel_item = tree_meta.selection()
+            if sel_item:
+                vals_p = tree_meta.item(sel_item[0], "values")
+                dlg.clipboard_clear()
+                dlg.clipboard_append(f"{vals_p[1]}: {vals_p[2]}")
+                messagebox.showinfo("Clipboard", f"Copied:\n{vals_p[1]}: {vals_p[2]}", parent=dlg)
+
+        tk.Button(btn_bar, text="Export CSV...", font=("Tahoma", 8), relief=tk.RAISED, bd=1, command=export_csv).pack(side=tk.LEFT, padx=3)
+        tk.Button(btn_bar, text="Export JSON...", font=("Tahoma", 8), relief=tk.RAISED, bd=1, command=export_json).pack(side=tk.LEFT, padx=3)
+        tk.Button(btn_bar, text="Copy Selected", font=("Tahoma", 8), relief=tk.RAISED, bd=1, command=copy_selected_prop).pack(side=tk.LEFT, padx=3)
+        tk.Button(btn_bar, text="Close", font=("Tahoma", 8), width=8, relief=tk.RAISED, bd=1, command=dlg.destroy).pack(side=tk.RIGHT, padx=4)
 
     def dlg_filter_hash(self):
         if not self.current_files:
