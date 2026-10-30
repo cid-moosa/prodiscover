@@ -69,7 +69,7 @@ Type: files; Name: "{app}\*.eve"
 Type: dirifempty; Name: "{app}"
 
 [Run]
-Filename: "{app}\prodiscover.exe"; Description: "{cm:LaunchProgram,ProDiscover Basic}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\prodiscover.exe"; Description: "{cm:LaunchProgram,ProDiscover Basic}"; Flags: nowait postinstall skipifsilent runascurrentuser shellexec
 
 [Code]
 procedure InitializeWizard;
