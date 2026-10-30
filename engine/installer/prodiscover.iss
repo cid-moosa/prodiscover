@@ -69,7 +69,7 @@ Type: files; Name: "{app}\*.eve"
 Type: dirifempty; Name: "{app}"
 
 [Run]
-Filename: "{app}\prodiscover.exe"; Description: "{cm:LaunchProgram,ProDiscover Basic}"; Flags: nowait postinstall skipifsilent runascurrentuser shellexec
+Filename: "{app}\prodiscover.exe"; Description: "{cm:LaunchProgram,ProDiscover Basic}"; Flags: nowait postinstall skipifsilent shellexec
 
 [Code]
 procedure InitializeWizard;
@@ -81,5 +81,27 @@ begin
   begin
     if Pos('desktop', Lowercase(WizardForm.TasksList.ItemCaption[i])) > 0 then
       WizardForm.TasksList.Checked[i] := True;
+  end;
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  if CurPageID = wpFinished then
+  begin
+    // Restore ProDiscover fedora branding logo on Finish page
+    WizardForm.WizardBitmapImage2.Visible := True;
+    WizardForm.WizardBitmapImage2.Left := WizardForm.WizardBitmapImage.Left;
+    WizardForm.WizardBitmapImage2.Top := WizardForm.WizardBitmapImage.Top;
+    WizardForm.WizardBitmapImage2.Width := WizardForm.WizardBitmapImage.Width;
+    WizardForm.WizardBitmapImage2.Height := WizardForm.WizardBitmapImage.Height;
+    WizardForm.FinishedHeadingLabel.Left := WizardForm.WelcomeLabel1.Left;
+    WizardForm.FinishedHeadingLabel.Width := WizardForm.WelcomeLabel1.Width;
+    WizardForm.FinishedLabel.Left := WizardForm.WelcomeLabel2.Left;
+    WizardForm.FinishedLabel.Width := WizardForm.WelcomeLabel2.Width;
+    if Assigned(WizardForm.RunList) then
+    begin
+      WizardForm.RunList.Left := WizardForm.WelcomeLabel2.Left;
+      WizardForm.RunList.Width := WizardForm.WelcomeLabel2.Width;
+    end;
   end;
 end;

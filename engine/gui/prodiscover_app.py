@@ -982,7 +982,7 @@ class FilesystemDetector:
         dir_counter = [0]
         visited_clus = set()
 
-        def parse_directory(dir_id, name, path, cluster, first_sec, raw_bytes, parent_id=None, is_dir_deleted=False):
+        def parse_directory(dir_id, name, path, cluster, first_sec, raw_bytes, parent_id=None, is_dir_deleted=False, depth=0):
             dir_node = {
                 "id": dir_id,
                 "name": name,
@@ -996,6 +996,9 @@ class FilesystemDetector:
                 "files": []
             }
             all_dirs[dir_id] = dir_node
+
+            if depth > 32:
+                return dir_node
 
             lfn_parts = {}
 
@@ -1081,16 +1084,19 @@ class FilesystemDetector:
                     if full_name not in (".", ".."):
                         dir_node["files"].append(item_obj)
                         all_files_flat.append(item_obj)
-                        if start_clus >= 2 and start_clus not in visited_clus:
+                        if start_clus >= 2 and start_clus not in visited_clus and not is_deleted:
                             visited_clus.add(start_clus)
                             sub_chain = get_cluster_chain(start_clus)
                             if not sub_chain:
                                 sub_chain = [start_clus]
                             sub_bytes = b"".join(read_cluster_bytes(c) for c in sub_chain)
-                            sub_dir_node = parse_directory(
-                                child_dir_id, full_name, child_path, start_clus, first_s, sub_bytes, parent_id=dir_id, is_dir_deleted=is_deleted
-                            )
-                            dir_node["subdirs"].append(sub_dir_node)
+                            # Validate cluster signature: genuine FAT subdirectories must start with '.' entry (0x2E 0x20) and dir attribute 0x10
+                            is_genuine_dir = len(sub_bytes) >= 32 and sub_bytes[0:2] == b". " and (sub_bytes[11] & 0x10 != 0)
+                            if is_genuine_dir:
+                                sub_dir_node = parse_directory(
+                                    child_dir_id, full_name, child_path, start_clus, first_s, sub_bytes, parent_id=dir_id, is_dir_deleted=is_deleted, depth=depth+1
+                                )
+                                dir_node["subdirs"].append(sub_dir_node)
                 else:
                     dir_node["files"].append(item_obj)
                     all_files_flat.append(item_obj)
@@ -1101,10 +1107,10 @@ class FilesystemDetector:
         if is_fat32:
             root_chain = get_cluster_chain(root_clus)
             root_bytes = b"".join(read_cluster_bytes(c) for c in root_chain)
-            root_node = parse_directory("root", "Root Directory", "/", root_clus, root_start_sec, root_bytes, None)
+            root_node = parse_directory("root", "Root Directory", "/", root_clus, root_start_sec, root_bytes, None, False, 0)
         else:
             root_bytes = self.read_bytes(vbr_offset + root_start_sec * bps, rde * 32)
-            root_node = parse_directory("root", "Root Directory", "/", 0, root_start_sec, root_bytes, None)
+            root_node = parse_directory("root", "Root Directory", "/", 0, root_start_sec, root_bytes, None, False, 0)
 
         return {
             "type": fs_type,
@@ -1112,7 +1118,11 @@ class FilesystemDetector:
             "root_dir": root_node,
             "all_dirs": all_dirs,
             "files": root_node["files"],
-            "all_files": all_files_flat
+            "all_files": all_files_flat,
+            "bps": bps,
+            "spc": spc,
+            "first_data_sec": first_data_sec,
+            "vbr_offset": vbr_offset
         }
 
 class ProDiscoverApp:
@@ -2255,8 +2265,13 @@ class ProDiscoverApp:
                 for part in self.partitions:
                     if "all_dirs" in part:
                         self.all_dirs_map.update(part["all_dirs"])
-                self.cluster_size = self.partitions[0].get("cluster_size", 512)
-                root_d = self.partitions[0].get("root_dir")
+                part0 = self.partitions[0]
+                self.cluster_size = part0.get("cluster_size", 512)
+                self.fs_bps = part0.get("bps", 512)
+                self.fs_spc = part0.get("spc", 8)
+                self.fs_first_data_sec = part0.get("first_data_sec", 0)
+                self.fs_vbr_offset = part0.get("vbr_offset", 0)
+                root_d = part0.get("root_dir")
                 if root_d:
                     self.current_dir_node = root_d
                     self.current_files = root_d.get("files", [])
@@ -2352,6 +2367,11 @@ class ProDiscoverApp:
         if not raw_bytes:
             return None
 
+        # Verify genuine FAT directory cluster signature
+        if len(raw_bytes) >= 32:
+            if not (raw_bytes[0:2] == b". " and (raw_bytes[11] & 0x10 != 0)):
+                return None
+
         files = []
         lfn_parts = {}
         for i in range(0, len(raw_bytes), 32):
@@ -2391,12 +2411,16 @@ class ProDiscoverApp:
             f_sz = struct.unpack_from("<I", entry, 28)[0]
             is_sub_dir = bool(attr & 0x10)
 
-            spc = max(1, cluster_sz // 512)
-            f_sec = sec + (i // 512)
-            if f_clus >= 2 and hasattr(self, "partitions") and self.partitions:
-                p = self.partitions[0]
-                if p.get("cluster_size"):
-                    f_sec = sec + max(0, f_clus - target_entry.get("cluster", f_clus)) * spc
+            bps = getattr(self, "fs_bps", 512) or 512
+            spc = getattr(self, "fs_spc", max(1, cluster_sz // bps)) or 8
+            first_data_sec = getattr(self, "fs_first_data_sec", 0)
+            vbr_offset = getattr(self, "fs_vbr_offset", 0)
+            if f_clus >= 2 and first_data_sec > 0:
+                f_sec = (vbr_offset // bps) + first_data_sec + (f_clus - 2) * spc
+            elif f_clus >= 2 and target_entry.get("cluster"):
+                f_sec = sec + (f_clus - target_entry["cluster"]) * spc
+            else:
+                f_sec = sec + (i // bps)
 
             c_date = struct.unpack_from("<H", entry, 16)[0]
             c_time = struct.unpack_from("<H", entry, 14)[0]
@@ -2518,7 +2542,13 @@ class ProDiscoverApp:
                 sec = int(target_entry.get("first_sector", 0)) if target_entry else 0
                 if sec > 0:
                     self.load_sector(sec)
-                messagebox.showinfo("Directory Information", f"Directory '{name}' starting at Sector {sec} has no further accessible sub-entries.", parent=self.root)
+                messagebox.showinfo(
+                    "Forensic Directory Notice",
+                    f"Directory '{name}' (Cluster {target_entry.get('cluster', 0)}, Sector {sec}) cannot be traversed:\n\n"
+                    f"The directory entry was marked deleted and its cluster table has been overwritten by subsequent disk activity.\n\n"
+                    f"The raw cluster content has been loaded into the Hex & ASCII Data Inspector for examination.",
+                    parent=self.root
+                )
                 return
 
         # 3. If it is a deleted file (and not a folder!), prompt examiner to recover it
@@ -5322,13 +5352,15 @@ class ProDiscoverApp:
                 exif_props.append((cat, prop_name, val_repr))
 
         except Exception as err:
-            if header.startswith(b".          \x10"):
+            is_dir_record = (len(header) >= 12 and header[:2] == b". " and (header[11] & 0x10 != 0)) or header[:2] == b".."
+            if is_dir_record:
                 exif_props.append(("Forensic Notice", "Cluster Overwritten", "Starting cluster contains FAT directory records (.) and (..) instead of image pixels."))
                 exif_props.append(("Forensic Notice", "Carving Required", "The original image payload was deleted and overwritten. Use 'Action -> Carve Deleted Files'."))
             elif set(raw_bytes[:256]) == {0}:
                 exif_props.append(("Forensic Notice", "Zero Fill", "Starting sector contains all 0x00 null bytes (Unallocated slack / zero gap)."))
             else:
-                exif_props.append(("Forensic Notice", "Decoding Warning", f"Could not decode graphic stream: {err}"))
+                exif_props.append(("Forensic Notice", "Payload Overwritten", f"Graphic header signature missing or invalid ({err})."))
+                exif_props.append(("Forensic Notice", "Carving Required", "File payload was deleted or overwritten by subsequent disk activity. Use 'Action -> Carve Deleted Files'."))
 
         # Add File System & Integrity Properties
         exif_props.append(("File System", "File Name", fname))
