@@ -36,6 +36,7 @@ Name: "associate"; Description: "Associate ProDiscover with .eve, .dd, and .pds 
 
 [Files]
 Source: "..\..\builds\bin\prodiscover.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\builds\bin\prodiscover-engine.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\gui\assets\*"; DestDir: "{app}\assets"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 
