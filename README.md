@@ -16,6 +16,15 @@
   </a>
 </p>
 
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.10+-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.10+" />
+  <img src="https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat-square&logo=go&logoColor=white" alt="Go 1.22+" />
+  <img src="https://img.shields.io/badge/License-Educational%20%2F%20Research-blue.svg?style=flat-square" alt="License" />
+  <a href="https://github.com/cid-moosa/prodiscover/issues">
+    <img src="https://img.shields.io/github/issues/cid-moosa/prodiscover?style=flat-square&color=orange" alt="Open Issues" />
+  </a>
+</p>
+
 > [!NOTE]
 > ### 🛡️ Notice on Windows SmartScreen ("Windows protected your PC")
 > When running `ProDiscover_Setup.exe` on Windows 10 or 11, Microsoft Defender SmartScreen may display a blue warning screen stating:
@@ -167,6 +176,21 @@ The acquisition engine was rigorously validated through automated differential t
 
 ---
 
+## Tech Stack
+
+- **Forensic Engine:** Go (Zero CGO, pure cross-compilation, memory-safe bit-stream I/O)
+- **Desktop Interface:** Python 3 (Tkinter + Win32 API via `ctypes`), Zero Localhost / Zero Web Server
+- **Systems & Block Access:** Win32 API (`CreateFileW`, `DeviceIoControl`, `GlobalMemoryStatusEx`, `ReadProcessMemory`) & Linux POSIX (`O_RDONLY`, `BLKGETSIZE64`)
+- **Distribution & Installer:** Inno Setup 6 (SHA-256 Authenticode signed, automated uninstaller lifecycle)
+
+---
+
 ## License & Legal Notice
 
 This project is developed for educational, academic, and forensic research purposes. ProDiscover is a registered trademark of its respective owners. This implementation represents an independent modern clean-room reconstruction engineered to ensure compatibility and training continuity on modern 64-bit operating systems.
+
+---
+
+<p align="center">
+  Reconstructed with precision by <a href="https://github.com/cid-moosa">cid-moosa</a>.
+</p>
